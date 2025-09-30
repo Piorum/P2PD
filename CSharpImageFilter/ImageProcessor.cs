@@ -25,20 +25,24 @@ public static class ImageProcessor
     /// <summary>
     /// Processes an input image using a configurable dithering algorithm and saves the result.
     /// </summary>
-    /// <param name="inputPath">Path to the source image.</param>
-    /// <param name="outputPath">Path to save the processed image.</param>
-    /// <param name="downscaleFactor">The factor by which to downscale the image before processing.</param>
-    /// <param name="config">The configuration for the dithering algorithm.</param>
     public static void ProcessImage(string inputPath, string outputPath, int downscaleFactor, DitheringConfig config)
     {
         using var input = Image.Load<Rgba32>(inputPath);
 
-        var unifiedPalette = SelectBestPalette(input, config);
+        var unifiedPalette = SelectBestPalette(input, config).ToArray();
         Console.WriteLine("Selected Unified Palette: " + string.Join(", ", unifiedPalette.Select(c => c.ToHex())));
 
-        Console.WriteLine("Generating pixel combinations (with optimizations)...");
-        var combinations = GenerateCombinations(unifiedPalette.ToArray(), 4);
+        Console.WriteLine("Generating pixel combinations...");
+        var combinations = GenerateCombinations(unifiedPalette, 4);
         Console.WriteLine($"Total combinations to check per pixel: {combinations.Count}");
+
+        Console.WriteLine("Pre-calculating Lab conversions for average colors...");
+        var avgColorLabCache = combinations
+            .Select(c => new Rgba32((byte)(c.ColorSum.X / 4f), (byte)(c.ColorSum.Y / 4f), (byte)(c.ColorSum.Z / 4f)))
+            .Distinct()
+            .AsParallel()
+            .ToDictionary(c => c, ColorConversion.ToLab);
+        Console.WriteLine($"Cached {avgColorLabCache.Count} unique average colors.");
 
         Console.WriteLine("Downscaling image...");
         int newW = input.Width / downscaleFactor;
@@ -56,10 +60,10 @@ public static class ImageProcessor
         }
 
         var colorToBlockDict = new ConcurrentDictionary<Rgba32, Rgba32[,]>();
-        Console.WriteLine($"Finding best blocks for {uniqueColors.Count} unique colors...");
+        Console.WriteLine($"Finding best blocks for {uniqueColors.Count} unique colors (exhaustive search)...");
         Parallel.ForEach(uniqueColors, color =>
         {
-            colorToBlockDict[color] = ComputeBestBlock(color, combinations, config);
+            colorToBlockDict[color] = ComputeBestBlock(color, combinations, avgColorLabCache, config);
         });
 
         Console.WriteLine("Reconstructing final image...");
@@ -97,7 +101,7 @@ public static class ImageProcessor
                 optimizedPalette[i] = ColorConversion.ToRgb(biasedLab);
             }
         }
-        return optimizedPalette;
+        return optimizedPalette.Distinct().ToList();
     }
 
     private static List<PixelCombination> GenerateCombinations(Rgba32[] palette, int count)
@@ -128,7 +132,7 @@ public static class ImageProcessor
         return results;
     }
 
-    private static Rgba32[,] ComputeBestBlock(Rgba32 pixel, List<PixelCombination> combinations, DitheringConfig config)
+    private static Rgba32[,] ComputeBestBlock(Rgba32 pixel, List<PixelCombination> combinations, Dictionary<Rgba32, Lab> avgColorLabCache, DitheringConfig config)
     {
         var targetLab = ColorConversion.ToLab(pixel);
         PixelCombination bestCombination = combinations[0];
@@ -138,7 +142,8 @@ public static class ImageProcessor
         {
             var totalSum = combination.ColorSum;
             var averageBlockColor = new Rgba32((byte)(totalSum.X / 4f), (byte)(totalSum.Y / 4f), (byte)(totalSum.Z / 4f));
-            var blockLab = ColorConversion.ToLab(averageBlockColor);
+            
+            var blockLab = avgColorLabCache[averageBlockColor]; // OPTIMIZED: Fast cache lookup
 
             float dL = targetLab.L - blockLab.L;
             float dA = targetLab.A - blockLab.A;
