@@ -29,49 +29,41 @@ public record DitheringConfig(
     float SmoothnessPreference = 0.0f 
 );
 
-// ... ColorQuad record should be here ...
+/// <summary>
+/// A record to hold a 2x2 grid of colors and its pre-calculated average color.
+/// Using a record struct is memory-efficient.
+/// </summary>
 public readonly record struct ColorQuad(
-    Rgba32 AverageColor, Rgba32 TopLeft, Rgba32 TopRight, Rgba32 BottomLeft, Rgba32 BottomRight
+    Rgba32 AverageColor,
+    Rgba32 TopLeft,
+    Rgba32 TopRight,
+    Rgba32 BottomLeft,
+    Rgba32 BottomRight
 );
 
 public static class ImageProcessor
 {
     public static void ProcessImage(string inputPath, string outputPath, int downscaleFactor, DitheringConfig config)
     {
-        // --- THIS IS THE NEW LOGIC BLOCK ---
-        List<Rgba32> finalPalette;
-        if (config.CustomPalette != null && config.PaletteSize < config.CustomPalette.Count)
+        List<Rgba32> palette = config.CustomPalette ?? new List<Rgba32>();
+        if (palette.Count < 1)
         {
-            // If a master palette is provided and we need a smaller subset,
-            // analyze the image to find the best colors.
-            using var imageForPaletteAnalysis = Image.Load<Rgba32>(inputPath);
-            finalPalette = PaletteSelector.SelectBestSubsetFromPalette(imageForPaletteAnalysis, config.CustomPalette, config.PaletteSize);
-        }
-        else
-        {
-            // Otherwise, just use the custom palette as is (or an empty list if null).
-            finalPalette = config.CustomPalette ?? new List<Rgba32>();
-        }
-
-        if (finalPalette.Count < 1)
-        {
-            Console.WriteLine("Error: The final palette is empty. Cannot process image.");
+            Console.WriteLine("Error: A palette is required.");
             return;
         }
-        // --- END OF NEW LOGIC BLOCK ---
 
-        // The rest of the method now uses 'finalPalette' instead of 'palette'.
-        Dictionary<Rgba32, ColorQuad> quadsByAverageColor = PrecomputeSimplifiedQuads(finalPalette);
+        Dictionary<Rgba32, ColorQuad> quadsByAverageColor = PrecomputeSimplifiedQuads(palette);
         List<Rgba32> averageColorsPalette = [.. quadsByAverageColor.Keys];
 
         Console.WriteLine("Optimized lookup structures created.");
-        
+
+
         using Image<Rgba32> image = Image.Load<Rgba32>(inputPath);
         Console.WriteLine($"Original image dimensions: {image.Width}x{image.Height}");
-        
-        // This should probably be inside a using statement if it's creating a new image
+
         using var downscaledImage = HardDownscale(image, downscaleFactor);
 
+        // --- STEP 3: PROCESS WITH QUADS (Unchanged) ---
         var smallSize = new Size(downscaledImage.Width, downscaledImage.Height);
         var outputSize = new Size(smallSize.Width * 2, smallSize.Height * 2);
         using var outputImage = new Image<Rgba32>(outputSize.Width, outputSize.Height);
@@ -91,33 +83,41 @@ public static class ImageProcessor
                 outputImage[x * 2 + 1, y * 2 + 1] = bestQuad.BottomRight;
             }
         });
-        
+
         Console.WriteLine("Pixel processing complete.");
         outputImage.Save(outputPath);
         Console.WriteLine($"Image saved successfully to {outputPath} with final dimensions: {outputImage.Width}x{outputImage.Height}");
     }
 
-    // PrecomputeSimplifiedQuads and HardDownscale remain the same...
+    // The PrecomputeSimplifiedQuads method remains exactly the same.
     private static Dictionary<Rgba32, ColorQuad> PrecomputeSimplifiedQuads(List<Rgba32> palette)
     {
-        //... (no changes here)
         var quads = new Dictionary<Rgba32, ColorQuad>();
-        foreach (var c1 in palette) { quads[c1] = new ColorQuad(c1, c1, c1, c1, c1); }
-        for (int i = 0; i < palette.Count; i++) {
-            for (int j = i + 1; j < palette.Count; j++) {
-                var c1 = palette[i]; var c2 = palette[j];
-                int avgR = (c1.R + c2.R) / 2; int avgG = (c1.G + c2.G) / 2; int avgB = (c1.B + c2.B) / 2;
+        foreach (var c1 in palette)
+        {
+            quads[c1] = new ColorQuad(c1, c1, c1, c1, c1);
+        }
+        for (int i = 0; i < palette.Count; i++)
+        {
+            for (int j = i + 1; j < palette.Count; j++)
+            {
+                var c1 = palette[i];
+                var c2 = palette[j];
+                int avgR = (c1.R + c2.R) / 2;
+                int avgG = (c1.G + c2.G) / 2;
+                int avgB = (c1.B + c2.B) / 2;
                 var avgColor = new Rgba32((byte)avgR, (byte)avgG, (byte)avgB);
-                if (!quads.ContainsKey(avgColor)) {
-                     quads[avgColor] = new ColorQuad(avgColor, c1, c2, c2, c1);
+                if (!quads.ContainsKey(avgColor))
+                {
+                    quads[avgColor] = new ColorQuad(avgColor, c1, c2, c2, c1);
                 }
             }
         }
         return quads;
     }
+    
     private static Image<Rgba32> HardDownscale(Image<Rgba32> input, int factor)
     {
-        //... (no changes here)
         int newW = input.Width / factor;
         int newH = input.Height / factor;
         var result = new Image<Rgba32>(newW, newH);

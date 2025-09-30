@@ -4,12 +4,10 @@ using SixLabors.ImageSharp.ColorSpaces.Conversion;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing.Processors.Quantization;
 using SixLabors.ImageSharp.Processing;
-using System.Collections.Generic;
-using System.Linq;
 
 namespace CSharpImageFilter;
 
-// HslColor record remains the same...
+// (This record might be in your file already, ensure it's present)
 public record HslColor(float H, float S, float L)
 {
     public float H { get; set; } = H;
@@ -19,68 +17,51 @@ public record HslColor(float H, float S, float L)
 
 public static class PaletteSelector
 {
+
     /// <summary>
-    /// Analyzes an image and selects the N most representative colors from a larger master palette.
+    /// Extracts a globally optimized palette from the image using an Octree Quantizer.
+    /// This is the correct, API-compliant way to generate a palette.
     /// </summary>
-    /// <param name="image">The source image to analyze.</param>
-    /// <param name="masterPalette">The complete list of allowed colors.</param>
-    /// <param name="subsetSize">The target number of colors to select.</param>
-    /// <returns>A smaller list of the most relevant colors for the image.</returns>
-    public static List<Rgba32> SelectBestSubsetFromPalette(Image<Rgba32> image, List<Rgba32> masterPalette, int subsetSize)
-    {
-        if (masterPalette == null || masterPalette.Count <= subsetSize)
-        {
-            return masterPalette!;
-        }
-
-        Console.WriteLine($"Selecting the best {subsetSize} colors from the master palette of {masterPalette.Count}...");
-
-        // Create a "vote count" for each color in the master palette.
-        var colorScores = masterPalette.ToDictionary(color => color, color => 0L);
-
-        // For each pixel in the image, find its closest color in the master palette and cast a "vote".
-        for (int y = 0; y < image.Height; y++)
-        {
-            for (int x = 0; x < image.Width; x++)
-            {
-                Rgba32 pixelColor = image[x, y];
-                // We only care about non-transparent pixels for this analysis
-                if (pixelColor.A > 0)
-                {
-                    Rgba32 closestPaletteColor = FindClosestColor(pixelColor, masterPalette);
-                    colorScores[closestPaletteColor]++;
-                }
-            }
-        }
-
-        // Order the colors by their score (number of votes) in descending order.
-        var sortedColors = colorScores.OrderByDescending(kvp => kvp.Value);
-
-        // Take the top N colors to form our new, optimized palette.
-        var finalPalette = sortedColors.Take(subsetSize).Select(kvp => kvp.Key).ToList();
-        
-        Console.WriteLine("Color subset selection complete.");
-        return finalPalette;
-    }
-
-    // GetOptimizedPalette remains the same...
     public static List<Rgba32> GetOptimizedPalette(Image<Rgba32> image, int paletteSize)
     {
-        var quantizerFactory = new OctreeQuantizer(new QuantizerOptions { MaxColors = paletteSize });
+        // 1. Create the top-level quantizer factory.
+        var quantizerFactory = new OctreeQuantizer(new QuantizerOptions
+        {
+            MaxColors = paletteSize
+        });
+
+        // 2. Use the factory to create a pixel-specific quantizer instance.
         IQuantizer<Rgba32> quantizer = quantizerFactory.CreatePixelSpecificQuantizer<Rgba32>(image.Configuration);
+
+        // 3. Create a default pixel sampling strategy to scan the entire image.
+        //    This was the missing argument from the previous attempt.
         var pixelSamplingStrategy = new DefaultPixelSamplingStrategy();
+
+        // 4. Call BuildPalette. This method returns VOID and modifies the 'quantizer' object in-place.
+        //    It populates the quantizer's internal state with colors from the source image.
         quantizer.BuildPalette(pixelSamplingStrategy, image);
+
+        // 5. NOW, retrieve the palette from the populated quantizer.
+        //    GetPalette() returns the ReadOnlyMemory<T> containing the final colors.
         ReadOnlyMemory<Rgba32> palette = quantizer.Palette;
+
+        // 6. Convert the ReadOnlyMemory<Rgba32> to a List and return it.
         return palette.Span.ToArray().ToList();
     }
 
-    // FindClosestColor remains the same...
+
+    /// <summary>
+    /// Finds the closest color in a palette to a target color using CIELAB distance.
+    /// </summary>
     public static Rgba32 FindClosestColor(Rgba32 target, List<Rgba32> palette)
     {
         if (palette == null || palette.Count == 0) return target;
+        
         var targetLab = ColorConversion.ToLab(target);
+        
         Rgba32 bestColor = palette[0];
         double minDistance = double.MaxValue;
+
         foreach (var color in palette)
         {
             var paletteLab = ColorConversion.ToLab(color);
@@ -93,8 +74,10 @@ public static class PaletteSelector
         }
         return bestColor;
     }
-
-    // GetLabDistanceSquared remains the same...
+    
+    /// <summary>
+    /// Calculates the squared Euclidean distance between two L*a*b* colors.
+    /// </summary>
     private static double GetLabDistanceSquared(Lab color1, Lab color2)
     {
         double dL = color1.L - color2.L;
@@ -103,7 +86,9 @@ public static class PaletteSelector
         return dL * dL + dA * dA + dB * dB;
     }
 
-    // RgbToHsl remains the same...
+    /// <summary>
+    /// Converts an Rgba32 color to the HSL color space (used for palette categorization).
+    /// </summary>
     public static HslColor RgbToHsl(Rgba32 rgba)
     {
         var hsl = ColorSpaceConverter.ToHsl(rgba);

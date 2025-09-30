@@ -9,13 +9,13 @@ class Program
         // 1. Define common parameters.
         string inputPath = "input.png";
         string outputPath = "output.png";
-        int downscaleFactor = 2;
+        int downscaleFactor = 3;
 
         var fullPalette = new List<Rgba32>
         {
-            Rgba32.ParseHex("#000000"), //Rgba32.ParseHex("#3c3c3c"), Rgba32.ParseHex("#787878"), 
-            //Rgba32.ParseHex("#aaaaaa"), Rgba32.ParseHex("#d2d2d2"), Rgba32.ParseHex("#ffffff"),
-            //Rgba32.ParseHex("#333941"), Rgba32.ParseHex("#6d758d"), Rgba32.ParseHex("#b3b9d1"),
+            Rgba32.ParseHex("#000000"), Rgba32.ParseHex("#3c3c3c"), Rgba32.ParseHex("#787878"), 
+            Rgba32.ParseHex("#aaaaaa"), Rgba32.ParseHex("#d2d2d2"), Rgba32.ParseHex("#ffffff"),
+            Rgba32.ParseHex("#333941"), Rgba32.ParseHex("#6d758d"), Rgba32.ParseHex("#b3b9d1"),
             Rgba32.ParseHex("#600018"), Rgba32.ParseHex("#a50e1e"), Rgba32.ParseHex("#ed1c24"),
             Rgba32.ParseHex("#fa8072"), Rgba32.ParseHex("#e45c1a"), Rgba32.ParseHex("#ff7f27"),
             Rgba32.ParseHex("#f6aa09"), Rgba32.ParseHex("#f9dd3b"), Rgba32.ParseHex("#fffabc"),
@@ -39,7 +39,7 @@ class Program
         // 3. Create the configuration object, passing your custom palette.
         //    The 'PaletteSize' parameter will now be ignored.
         var config = new DitheringConfig(
-            PaletteSize: 32, // This is ignored because we are providing a custom palette
+            PaletteSize: 64, // This is ignored because we are providing a custom palette
             CustomPalette: fullPalette, // Pass your list of colors here
 
             //these are useless right now
