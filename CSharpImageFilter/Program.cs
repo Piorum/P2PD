@@ -15,12 +15,14 @@ public record DitheringConfig(
     int BlueShades,
     int PaletteSize,
     int BeamWidth,
-    float LuminanceWeight,
+
     // NEW: A multiplier to prioritize brightness accuracy.
+    float LuminanceWeight,
+    
      // NEW: Globally adjusts the brightness of the selected palette.
-     // < 1.0f = Darker. (e.g., 0.9f makes colors 10% darker).
-     //   1.0f = No change.
-     // > 1.0f = Lighter.
+    // < 1.0f = Darker. (e.g., 0.9f makes colors 10% darker).
+    //   1.0f = No change.
+    // > 1.0f = Lighter.
     float BrightnessBias
 );
 
@@ -38,14 +40,14 @@ class Program
         // --- NEW CONFIGURATION "CONTROL PANEL" ---
         // Here you can easily adjust the quality vs. color count tradeoff.
         var config = new DitheringConfig(
-            RedShades: 5,      // #Shades including black
+            RedShades: 6,      // #Shades including black
             GreenShades: 5,    
             BlueShades: 5,     
             PaletteSize: 10, // More colors can lead to a better palette choice
             BeamWidth: 1024,
             // LOWER values preserve shadows/highlights better but may sacrifice color accuracy.
             // 1.0f = Original behavior.
-            LuminanceWeight: 0.7f,
+            LuminanceWeight: 0.67f,
             BrightnessBias: 1.0f
         );
         // -----------------------------------------
@@ -315,16 +317,13 @@ class Program
         }
 
         // Fill the Block (this part is unchanged)
-        Rgba32[,] block = new Rgba32[3, 3];
-        block[0, 0] = bestR.Pixels[0];
-        block[1, 0] = bestR.Pixels[1];
-        block[2, 0] = bestR.Pixels[2];
-        block[1, 1] = bestG.Pixels[0];
-        block[2, 1] = bestG.Pixels[1];
-        block[0, 1] = bestB.Pixels[0];
-        block[0, 2] = bestB.Pixels[1];
-        block[1, 2] = bestB.Pixels[2];
-        block[2, 2] = bestB.Pixels[3];
+        Rgba32[,] block = new Rgba32[,]
+        {
+            { bestB.Pixels[0], bestR.Pixels[0], bestB.Pixels[1] },
+            { bestR.Pixels[1], bestG.Pixels[0], bestR.Pixels[2] },
+            { bestB.Pixels[2], bestG.Pixels[1], bestB.Pixels[3] },
+        };
+
         return block;
     }
 
