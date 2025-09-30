@@ -10,11 +10,12 @@ public record ChannelCombination(Vector3 ColorSum, Rgba32[] Pixels);
 
 // NEW: A central place to control the dithering quality and color count.
 public record DitheringConfig(
-    int RedShades,     // How many shades of red to use (including black)
-    int GreenShades,   // How many shades of green to use (including black)
-    int BlueShades,    // How many shades of blue to use (including black)
-    int DominantColorsToFind, // How many initial colors to sample from the image
-    int BeamWidth      // The width for the beam search algorithm
+    int RedShades,
+    int GreenShades,
+    int BlueShades,
+    int DominantColorsToFind,
+    int BeamWidth,
+    float LuminanceWeight // NEW: A multiplier to prioritize brightness accuracy.
 );
 
 // NEW: An enum for clarity when working with color channels.
@@ -26,16 +27,19 @@ class Program
     {
         string inputPath = "input.png";
         string outputPath = "output.png";
-        int downscaleFactor = 9;
+        int downscaleFactor = 3;
 
         // --- NEW CONFIGURATION "CONTROL PANEL" ---
         // Here you can easily adjust the quality vs. color count tradeoff.
         var config = new DitheringConfig(
             RedShades: 5,      // #Shades including black
             GreenShades: 5,    
-            BlueShades: 4,     
-            DominantColorsToFind: 16, // More colors can lead to a better palette choice
-            BeamWidth: 1024
+            BlueShades: 5,     
+            DominantColorsToFind: 14, // More colors can lead to a better palette choice
+            BeamWidth: 1024,
+            // LOWER values preserve shadows/highlights better but may sacrifice color accuracy.
+            // 1.0f = Original behavior.
+            LuminanceWeight: 0.5f  
         );
         // -----------------------------------------
 
@@ -45,6 +49,7 @@ class Program
         var fullPalette = new List<Rgba32>
         {
             //Rgba32.ParseHex("#3c3c3c"), Rgba32.ParseHex("#787878"), Rgba32.ParseHex("#aaaaaa"), Rgba32.ParseHex("#d2d2d2"), Rgba32.ParseHex("#ffffff"),
+            //Rgba32.ParseHex("#333941"), Rgba32.ParseHex("#6d758d"), Rgba32.ParseHex("#b3b9d1"),
             Rgba32.ParseHex("#600018"), Rgba32.ParseHex("#a50e1e"), Rgba32.ParseHex("#ed1c24"),
             Rgba32.ParseHex("#fa8072"), Rgba32.ParseHex("#e45c1a"), Rgba32.ParseHex("#ff7f27"),
             Rgba32.ParseHex("#f6aa09"), Rgba32.ParseHex("#f9dd3b"), Rgba32.ParseHex("#fffabc"),
@@ -63,7 +68,6 @@ class Program
             Rgba32.ParseHex("#7b6352"), Rgba32.ParseHex("#9c846b"), Rgba32.ParseHex("#d6b594"),
             Rgba32.ParseHex("#d18051"), Rgba32.ParseHex("#f8b277"), Rgba32.ParseHex("#ffc5a5"),
             Rgba32.ParseHex("#6d643f"), Rgba32.ParseHex("#948c6b"), Rgba32.ParseHex("#cdc59e"),
-            Rgba32.ParseHex("#333941"), Rgba32.ParseHex("#6d758d"), Rgba32.ParseHex("#b3b9d1"),
         };
 
         var selectedPalette = SelectBestPalette(input, fullPalette, config);
@@ -103,7 +107,7 @@ class Program
         Parallel.ForEach(uniqueColors, color =>
         {
             // Pass the config's beam width to the computation function
-            colorToBlockDict[color] = ComputeBestBlock(color, rCombs, gCombs, bCombs, config.BeamWidth);
+            colorToBlockDict[color] = ComputeBestBlock(color, rCombs, gCombs, bCombs, config);
         });
 
         // --- IMAGE RECONSTRUCTION ---
@@ -231,36 +235,37 @@ class Program
         return results;
     }
 
+    /// <summary>
+    /// Finds the best 3x3 block of pixels by using a beam search and a
+    /// perceptually weighted L*a*b* error metric to preserve contrast.
+    /// </summary>
     static Rgba32[,] ComputeBestBlock(
         Rgba32 pixel,
         List<ChannelCombination> rCombs,
         List<ChannelCombination> gCombs,
         List<ChannelCombination> bCombs,
-        int beamWidth = 1024)
+        DitheringConfig config) // Changed to accept the full config
     {
+        // The beam search heuristic can remain in fast RGB space
         var targetTotalSum = new Vector3(pixel.R, pixel.G, pixel.B) * 9f;
-
-        // --- The Beam Search heuristic can remain in fast RGB space ---
         var targetRSum = targetTotalSum * (3f / 9f);
         var bestRs = rCombs
             .OrderBy(r => Vector3.DistanceSquared(r.ColorSum, targetRSum))
-            .Take(beamWidth)
+            .Take(config.BeamWidth)
             .ToList();
 
         var targetRGSum = targetTotalSum * (5f / 9f);
         var candidateRGs = new List<(ChannelCombination R, ChannelCombination G, Vector3 Sum)>();
-        foreach (var r in bestRs)
-            foreach (var g in gCombs)
-                candidateRGs.Add((r, g, r.ColorSum + g.ColorSum));
+        foreach(var r in bestRs)
+        foreach(var g in gCombs)
+            candidateRGs.Add((r, g, r.ColorSum + g.ColorSum));
 
         var topRGs = candidateRGs
             .OrderBy(rg => Vector3.DistanceSquared(rg.Sum, targetRGSum))
-            .Take(beamWidth)
+            .Take(config.BeamWidth)
             .ToList();
 
-        // --- STEP 3: Finalize with Blue using a perceptually accurate L*a*b* error metric ---
-
-        // THE KEY CHANGE IS HERE: We convert the target pixel to L*a*b* ONCE for comparison.
+        // --- Finalize with Blue using the weighted L*a*b* error metric ---
         var targetLab = ColorConversion.ToLab(pixel);
 
         ChannelCombination bestR = rCombs[0];
@@ -273,22 +278,25 @@ class Program
             foreach (var b in bCombs)
             {
                 var totalSum = rg.Sum + b.ColorSum;
-
-                // Create the average color of the 3x3 block
                 var averageBlockColor = new Rgba32(
                     (byte)(totalSum.X / 9f),
                     (byte)(totalSum.Y / 9f),
                     (byte)(totalSum.Z / 9f)
                 );
 
-                // Convert the block's average color to L*a*b*
                 var blockLab = ColorConversion.ToLab(averageBlockColor);
 
-                // Calculate error in L*a*b* space. This is the crucial improvement.
-                float error = Vector3.DistanceSquared(
-                    new Vector3(blockLab.L, blockLab.A, blockLab.B),
-                    new Vector3(targetLab.L, targetLab.A, targetLab.B)
-                );
+                // ===================================================================
+                //  THE CRITICAL CHANGE IS HERE
+                // ===================================================================
+                // We calculate the difference for each L*a*b* component separately.
+                float dL = targetLab.L - blockLab.L; // Difference in Lightness
+                float dA = targetLab.A - blockLab.A; // Difference in Green-Red
+                float dB = targetLab.B - blockLab.B; // Difference in Blue-Yellow
+
+                // We apply the weight to the Lightness component's error.
+                float error = (dL * config.LuminanceWeight) * (dL * config.LuminanceWeight) + (dA * dA) + (dB * dB);
+                // ===================================================================
 
                 if (error < minError)
                 {
@@ -300,20 +308,17 @@ class Program
             }
         }
 
-        // --- Fill the Block (this part is unchanged) ---
+        // Fill the Block (this part is unchanged)
         Rgba32[,] block = new Rgba32[3, 3];
         block[0, 0] = bestR.Pixels[0];
         block[1, 0] = bestR.Pixels[1];
         block[2, 0] = bestR.Pixels[2];
-
         block[1, 1] = bestG.Pixels[0];
         block[2, 1] = bestG.Pixels[1];
-
         block[0, 1] = bestB.Pixels[0];
         block[0, 2] = bestB.Pixels[1];
         block[1, 2] = bestB.Pixels[2];
         block[2, 2] = bestB.Pixels[3];
-
         return block;
     }
 
