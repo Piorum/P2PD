@@ -2,6 +2,8 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.ColorSpaces;
 using SixLabors.ImageSharp.ColorSpaces.Conversion;
 using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing.Processors.Quantization;
+using SixLabors.ImageSharp.Processing;
 
 namespace CSharpImageFilter;
 
@@ -17,92 +19,36 @@ public static class PaletteSelector
 {
 
     /// <summary>
-    /// Extracts the most dominant colors from an image using k-means clustering in the L*a*b* space.
-    /// This is perceptually more accurate than clustering in RGB.
+    /// Extracts a globally optimized palette from the image using an Octree Quantizer.
+    /// This is the correct, API-compliant way to generate a palette.
     /// </summary>
-    public static List<Rgba32> GetDominantColors(Image<Rgba32> image, int k)
+    public static List<Rgba32> GetOptimizedPalette(Image<Rgba32> image, int paletteSize)
     {
-        // 1. Convert all relevant image pixels from RGBA to LAB.
-        var labPixels = new List<Lab>();
-        image.ProcessPixelRows(accessor =>
+        // 1. Create the top-level quantizer factory.
+        var quantizerFactory = new OctreeQuantizer(new QuantizerOptions
         {
-            for (int y = 0; y < accessor.Height; y++)
-            {
-                foreach (var pixel in accessor.GetRowSpan(y))
-                {
-                    if (pixel.A > 128) // Only consider opaque pixels
-                    {
-                        labPixels.Add(ColorConversion.ToLab(pixel));
-                    }
-                }
-            }
+            MaxColors = paletteSize
         });
 
-        if (labPixels.Count == 0) return new List<Rgba32>();
-        if (labPixels.Count < k) k = labPixels.Count;
+        // 2. Use the factory to create a pixel-specific quantizer instance.
+        IQuantizer<Rgba32> quantizer = quantizerFactory.CreatePixelSpecificQuantizer<Rgba32>(image.Configuration);
 
+        // 3. Create a default pixel sampling strategy to scan the entire image.
+        //    This was the missing argument from the previous attempt.
+        var pixelSamplingStrategy = new DefaultPixelSamplingStrategy();
 
-        // 2. K-means clustering directly on the L*a*b* color values.
-        var random = new Random();
-        var centroids = labPixels.OrderBy(x => random.Next()).Take(k).ToList();
-        var assignments = new int[labPixels.Count];
+        // 4. Call BuildPalette. This method returns VOID and modifies the 'quantizer' object in-place.
+        //    It populates the quantizer's internal state with colors from the source image.
+        quantizer.BuildPalette(pixelSamplingStrategy, image);
 
-        for (int i = 0; i < 15; i++) // Iterate a few times for convergence
-        {
-            bool changed = false;
-            // Assign each pixel to the closest centroid
-            for (int j = 0; j < labPixels.Count; j++)
-            {
-                double minDistance = double.MaxValue;
-                int bestCentroid = 0;
-                for (int c = 0; c < k; c++)
-                {
-                    // The key change: Distance is now calculated in L*a*b* space!
-                    double distance = GetLabDistanceSquared(labPixels[j], centroids[c]);
-                    if (distance < minDistance)
-                    {
-                        minDistance = distance;
-                        bestCentroid = c;
-                    }
-                }
-                if (assignments[j] != bestCentroid)
-                {
-                    assignments[j] = bestCentroid;
-                    changed = true;
-                }
-            }
-            if (!changed) break; // Converged
+        // 5. NOW, retrieve the palette from the populated quantizer.
+        //    GetPalette() returns the ReadOnlyMemory<T> containing the final colors.
+        ReadOnlyMemory<Rgba32> palette = quantizer.Palette;
 
-            // Recalculate centroids
-            var newCentroids = new Lab[k];
-            var counts = new int[k];
-            for (int j = 0; j < labPixels.Count; j++)
-            {
-                newCentroids[assignments[j]] = newCentroids[assignments[j]] with
-                {
-                    L = newCentroids[assignments[j]].L + labPixels[j].L,
-                    A = newCentroids[assignments[j]].A + labPixels[j].A,
-                    B = newCentroids[assignments[j]].B + labPixels[j].B
-                };
-                counts[assignments[j]]++;
-            }
-
-            for (int c = 0; c < k; c++)
-            {
-                if (counts[c] > 0)
-                {
-                    centroids[c] = new Lab(
-                        newCentroids[c].L / counts[c],
-                        newCentroids[c].A / counts[c],
-                        newCentroids[c].B / counts[c]
-                    );
-                }
-            }
-        }
-
-        // 3. Convert the final L*a*b* centroids back to RGBA to return the palette.
-        return centroids.Select(c => ColorConversion.ToRgb(c)).ToList();
+        // 6. Convert the ReadOnlyMemory<Rgba32> to a List and return it.
+        return palette.Span.ToArray().ToList();
     }
+
 
     /// <summary>
     /// Finds the closest color in a palette to a target color using CIELAB distance.

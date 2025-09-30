@@ -13,9 +13,15 @@ public record DitheringConfig(
     int RedShades,
     int GreenShades,
     int BlueShades,
-    int DominantColorsToFind,
+    int PaletteSize,
     int BeamWidth,
-    float LuminanceWeight // NEW: A multiplier to prioritize brightness accuracy.
+    float LuminanceWeight,
+    // NEW: A multiplier to prioritize brightness accuracy.
+     // NEW: Globally adjusts the brightness of the selected palette.
+     // < 1.0f = Darker. (e.g., 0.9f makes colors 10% darker).
+     //   1.0f = No change.
+     // > 1.0f = Lighter.
+    float BrightnessBias
 );
 
 // NEW: An enum for clarity when working with color channels.
@@ -35,11 +41,12 @@ class Program
             RedShades: 5,      // #Shades including black
             GreenShades: 5,    
             BlueShades: 5,     
-            DominantColorsToFind: 14, // More colors can lead to a better palette choice
+            PaletteSize: 10, // More colors can lead to a better palette choice
             BeamWidth: 1024,
             // LOWER values preserve shadows/highlights better but may sacrifice color accuracy.
             // 1.0f = Original behavior.
-            LuminanceWeight: 0.5f  
+            LuminanceWeight: 0.7f,
+            BrightnessBias: 1.0f
         );
         // -----------------------------------------
 
@@ -48,7 +55,8 @@ class Program
 
         var fullPalette = new List<Rgba32>
         {
-            //Rgba32.ParseHex("#3c3c3c"), Rgba32.ParseHex("#787878"), Rgba32.ParseHex("#aaaaaa"), Rgba32.ParseHex("#d2d2d2"), Rgba32.ParseHex("#ffffff"),
+            //Rgba32.ParseHex("#000000"), Rgba32.ParseHex("#3c3c3c"), Rgba32.ParseHex("#787878"), 
+            //Rgba32.ParseHex("#aaaaaa"), Rgba32.ParseHex("#d2d2d2"), Rgba32.ParseHex("#ffffff"),
             //Rgba32.ParseHex("#333941"), Rgba32.ParseHex("#6d758d"), Rgba32.ParseHex("#b3b9d1"),
             Rgba32.ParseHex("#600018"), Rgba32.ParseHex("#a50e1e"), Rgba32.ParseHex("#ed1c24"),
             Rgba32.ParseHex("#fa8072"), Rgba32.ParseHex("#e45c1a"), Rgba32.ParseHex("#ff7f27"),
@@ -133,59 +141,57 @@ class Program
         Console.WriteLine("Done.");
     }
 
-    /// <summary>
-    /// Selects the best palette colors for each channel based on the image content and configuration.
-    /// </summary>
     static Dictionary<ColorChannel, List<Rgba32>> SelectBestPalette(
         Image<Rgba32> input,
-        List<Rgba32> fullPalette,
+        List<Rgba32> fullPalette, // This is now used as a "filter"
         DitheringConfig config)
     {
-        Console.WriteLine($"Selecting best palette from {config.DominantColorsToFind} dominant colors...");
-        var dominantColors = PaletteSelector.GetDominantColors(input, config.DominantColorsToFind);
+        Console.WriteLine($"Generating a globally optimized palette of {config.PaletteSize} colors...");
+        
+        // 1. Get the high-quality palette from the Octree Quantizer
+        var optimizedPalette = PaletteSelector.GetOptimizedPalette(input, config.PaletteSize);
 
-        var redishPalette = fullPalette.Where(c => IsRedish(c)).ToList();
-        var greenishPalette = fullPalette.Where(c => IsGreenish(c)).ToList();
-        var blueishPalette = fullPalette.Where(c => IsBlueish(c)).ToList();
-
-        var colorScores = new Dictionary<Rgba32, float>();
-
-        foreach (var color in dominantColors)
+        // 2. Apply the Brightness Bias to the entire palette in L*a*b* space
+        if (Math.Abs(config.BrightnessBias - 1.0f) > 0.001f)
         {
-            List<Rgba32> targetPalette;
-            if (IsRedish(color)) targetPalette = redishPalette;
-            else if (IsGreenish(color)) targetPalette = greenishPalette;
-            else if (IsBlueish(color)) targetPalette = blueishPalette;
-            else continue;
-
-            if (!targetPalette.Any()) continue;
-
-            var closest = PaletteSelector.FindClosestColor(color, targetPalette);
-            if (colorScores.ContainsKey(closest))
-                colorScores[closest]++;
-            else
-                colorScores[closest] = 1;
+            for (int i = 0; i < optimizedPalette.Count; i++)
+            {
+                var lab = ColorConversion.ToLab(optimizedPalette[i]);
+                // Adjust the L* (Lightness) component
+                var biasedLab = new Lab(lab.L * config.BrightnessBias, lab.A, lab.B);
+                optimizedPalette[i] = ColorConversion.ToRgb(biasedLab);
+            }
         }
 
-        // Select the top N scored colors for each channel based on the config
-        var finalRed = colorScores.Where(kvp => redishPalette.Contains(kvp.Key))
-            .OrderByDescending(kvp => kvp.Value).Select(kvp => kvp.Key).Take(config.RedShades - 1).ToList();
-        var finalGreen = colorScores.Where(kvp => greenishPalette.Contains(kvp.Key))
-            .OrderByDescending(kvp => kvp.Value).Select(kvp => kvp.Key).Take(config.GreenShades - 1).ToList();
-        var finalBlue = colorScores.Where(kvp => blueishPalette.Contains(kvp.Key))
-            .OrderByDescending(kvp => kvp.Value).Select(kvp => kvp.Key).Take(config.BlueShades - 1).ToList();
+        // 3. Instead of scoring, we now find the closest colors from our "master" fullPalette
+        //    to the optimized colors. This ensures we still use our curated set.
+        var finalRed = optimizedPalette.Where(IsRedish)
+            .Select(c => PaletteSelector.FindClosestColor(c, fullPalette.Where(IsRedish).ToList()))
+            .Distinct().Take(config.RedShades - 1).ToList();
 
-        // Fill any empty slots if not enough colors were scored from the dominant set
-        while (finalRed.Count < config.RedShades - 1 && redishPalette.Count > finalRed.Count)
-            finalRed.Add(redishPalette.First(c => !finalRed.Contains(c)));
-        while (finalGreen.Count < config.GreenShades - 1 && greenishPalette.Count > finalGreen.Count)
-            finalGreen.Add(greenishPalette.First(c => !finalGreen.Contains(c)));
-        while (finalBlue.Count < config.BlueShades - 1 && blueishPalette.Count > finalBlue.Count)
-            finalBlue.Add(blueishPalette.First(c => !finalBlue.Contains(c)));
+        var finalGreen = optimizedPalette.Where(IsGreenish)
+            .Select(c => PaletteSelector.FindClosestColor(c, fullPalette.Where(IsGreenish).ToList()))
+            .Distinct().Take(config.GreenShades - 1).ToList();
+
+        var finalBlue = optimizedPalette.Where(IsBlueish)
+            .Select(c => PaletteSelector.FindClosestColor(c, fullPalette.Where(IsBlueish).ToList()))
+            .Distinct().Take(config.BlueShades - 1).ToList();
+
+
+        // The rest of the method (filling empty slots and adding black) remains the same...
+        var redishMaster = fullPalette.Where(IsRedish).ToList();
+        while (finalRed.Count < config.RedShades - 1 && redishMaster.Count > finalRed.Count)
+            finalRed.Add(redishMaster.First(c => !finalRed.Contains(c)));
+        
+        var greenishMaster = fullPalette.Where(IsGreenish).ToList();
+        while (finalGreen.Count < config.GreenShades - 1 && greenishMaster.Count > finalGreen.Count)
+            finalGreen.Add(greenishMaster.First(c => !finalGreen.Contains(c)));
+
+        var blueishMaster = fullPalette.Where(IsBlueish).ToList();
+        while (finalBlue.Count < config.BlueShades - 1 && blueishMaster.Count > finalBlue.Count)
+            finalBlue.Add(blueishMaster.First(c => !finalBlue.Contains(c)));
 
         var black = Rgba32.ParseHex("#000000");
-
-        // Add black to each list, as it's a fundamental part of the combinations
         finalRed.Insert(0, black);
         finalGreen.Insert(0, black);
         finalBlue.Insert(0, black);
