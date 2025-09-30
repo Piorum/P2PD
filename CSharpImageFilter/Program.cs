@@ -8,18 +8,43 @@ namespace CSharpImageFilter;
 // Helper record to store the result of a channel's sub-pixel combination
 public record ChannelCombination(Vector3 ColorSum, Rgba32[] Pixels);
 
+// NEW: A central place to control the dithering quality and color count.
+public record DitheringConfig(
+    int RedShades,     // How many shades of red to use (including black)
+    int GreenShades,   // How many shades of green to use (including black)
+    int BlueShades,    // How many shades of blue to use (including black)
+    int DominantColorsToFind, // How many initial colors to sample from the image
+    int BeamWidth      // The width for the beam search algorithm
+);
+
+// NEW: An enum for clarity when working with color channels.
+public enum ColorChannel { Red, Green, Blue }
+
 class Program
 {
     static void Main()
     {
         string inputPath = "input.png";
         string outputPath = "output.png";
-        int downscaleFactor = 3;
+        int downscaleFactor = 9;
+
+        // --- NEW CONFIGURATION "CONTROL PANEL" ---
+        // Here you can easily adjust the quality vs. color count tradeoff.
+        var config = new DitheringConfig(
+            RedShades: 5,      // #Shades including black
+            GreenShades: 5,    
+            BlueShades: 4,     
+            DominantColorsToFind: 16, // More colors can lead to a better palette choice
+            BeamWidth: 1024
+        );
+        // -----------------------------------------
+
 
         using var input = Image.Load<Rgba32>(inputPath);
 
         var fullPalette = new List<Rgba32>
         {
+            //Rgba32.ParseHex("#3c3c3c"), Rgba32.ParseHex("#787878"), Rgba32.ParseHex("#aaaaaa"), Rgba32.ParseHex("#d2d2d2"), Rgba32.ParseHex("#ffffff"),
             Rgba32.ParseHex("#600018"), Rgba32.ParseHex("#a50e1e"), Rgba32.ParseHex("#ed1c24"),
             Rgba32.ParseHex("#fa8072"), Rgba32.ParseHex("#e45c1a"), Rgba32.ParseHex("#ff7f27"),
             Rgba32.ParseHex("#f6aa09"), Rgba32.ParseHex("#f9dd3b"), Rgba32.ParseHex("#fffabc"),
@@ -41,17 +66,23 @@ class Program
             Rgba32.ParseHex("#333941"), Rgba32.ParseHex("#6d758d"), Rgba32.ParseHex("#b3b9d1"),
         };
 
-        var finalPalette = SelectBestPalette(input, fullPalette);
+        var selectedPalette = SelectBestPalette(input, fullPalette, config);
+
+        Console.WriteLine("Selected Red Shades: " + string.Join(", ", selectedPalette[ColorChannel.Red].Select(c => c.ToHex())));
+        Console.WriteLine("Selected Green Shades: " + string.Join(", ", selectedPalette[ColorChannel.Green].Select(c => c.ToHex())));
+        Console.WriteLine("Selected Blue Shades: " + string.Join(", ", selectedPalette[ColorChannel.Blue].Select(c => c.ToHex())));
 
         // --- PRE-COMPUTATION STEP ---
-        // Generate all possible color combinations for each channel's sub-pixels
-        var rCombs = GenerateChannelCombinations(
-            [finalPalette.Black, finalPalette.RedDark, finalPalette.RedNormal, finalPalette.RedLight], 3);
-        var gCombs = GenerateChannelCombinations(
-            [finalPalette.Black, finalPalette.GreenDark, finalPalette.GreenNormal, finalPalette.GreenLight], 2);
-        var bCombs = GenerateChannelCombinations(
-            [finalPalette.Black, finalPalette.BlueDark, finalPalette.BlueNormal, finalPalette.BlueLight], 4);
+        // Generate all possible color combinations using the new dynamic palettes
+        Console.WriteLine("Generating channel combinations...");
+        var rCombs = GenerateChannelCombinations(selectedPalette[ColorChannel.Red].ToArray(), 3);
+        var gCombs = GenerateChannelCombinations(selectedPalette[ColorChannel.Green].ToArray(), 2);
+        var bCombs = GenerateChannelCombinations(selectedPalette[ColorChannel.Blue].ToArray(), 4);
+        
+        Console.WriteLine($"Total combinations to check per pixel: R={rCombs.Count}, G={gCombs.Count}, B={bCombs.Count}");
 
+
+        Console.WriteLine("Downscaling image...");
         int newW = input.Width / downscaleFactor;
         int newH = input.Height / downscaleFactor;
         var downscaled = HardDownscale(input, downscaleFactor);
@@ -66,63 +97,63 @@ class Program
             }
         }
 
-        // Cache of full 3x3 blocks for each unique color// ... in your Main method
-
-        // Change this from Dictionary to ConcurrentDictionary for thread safety
         var colorToBlockDict = new ConcurrentDictionary<Rgba32, Rgba32[,]>();
 
-        // Replace the standard foreach loop with Parallel.ForEach
+        Console.WriteLine($"Finding best blocks for {uniqueColors.Count} unique colors...");
         Parallel.ForEach(uniqueColors, color =>
         {
-            // Use the new Hill Climbing function
-            colorToBlockDict[color] = ComputeBestBlock(color, rCombs, gCombs, bCombs);
+            // Pass the config's beam width to the computation function
+            colorToBlockDict[color] = ComputeBestBlock(color, rCombs, gCombs, bCombs, config.BeamWidth);
         });
 
-        // ... the rest of your code remains the same
-
         // --- IMAGE RECONSTRUCTION ---
+        // (The rest of this method from here down remains unchanged)
+        Console.WriteLine("Reconstructing final image...");
         int outW = newW * 3;
         int outH = newH * 3;
         using var output = new Image<Rgba32>(outW, outH);
 
         for (int y = 0; y < newH; y++)
-        for (int x = 0; x < newW; x++)
-        {
-            var px = downscaled[x, y];
-            if (px.A == 0) continue;
-            var block = colorToBlockDict[px];
+            for (int x = 0; x < newW; x++)
+            {
+                var px = downscaled[x, y];
+                if (px.A == 0) continue;
+                var block = colorToBlockDict[px];
 
-            for (int row = 0; row < 3; row++)
-            for (int col = 0; col < 3; col++)
-                output[x * 3 + col, y * 3 + row] = block[row, col];
-        }
+                for (int row = 0; row < 3; row++)
+                    for (int col = 0; col < 3; col++)
+                        output[x * 3 + col, y * 3 + row] = block[row, col];
+            }
 
         output.Save(outputPath);
         Console.WriteLine("Done.");
     }
 
     /// <summary>
-    /// Selects the 9 best palette colors based on the image content using hue categorization.
+    /// Selects the best palette colors for each channel based on the image content and configuration.
     /// </summary>
-    static Palette SelectBestPalette(Image<Rgba32> input, List<Rgba32> fullPalette)
+    static Dictionary<ColorChannel, List<Rgba32>> SelectBestPalette(
+        Image<Rgba32> input,
+        List<Rgba32> fullPalette,
+        DitheringConfig config)
     {
-        var dominantColors = PaletteSelector.GetDominantColors(input, 16);
+        Console.WriteLine($"Selecting best palette from {config.DominantColorsToFind} dominant colors...");
+        var dominantColors = PaletteSelector.GetDominantColors(input, config.DominantColorsToFind);
 
-        // Categorize the full palette based on hue
         var redishPalette = fullPalette.Where(c => IsRedish(c)).ToList();
         var greenishPalette = fullPalette.Where(c => IsGreenish(c)).ToList();
         var blueishPalette = fullPalette.Where(c => IsBlueish(c)).ToList();
 
         var colorScores = new Dictionary<Rgba32, float>();
 
-        // Score palette colors based on their proximity to the dominant image colors
         foreach (var color in dominantColors)
         {
             List<Rgba32> targetPalette;
             if (IsRedish(color)) targetPalette = redishPalette;
             else if (IsGreenish(color)) targetPalette = greenishPalette;
-            else targetPalette = blueishPalette;
-            
+            else if (IsBlueish(color)) targetPalette = blueishPalette;
+            else continue;
+
             if (!targetPalette.Any()) continue;
 
             var closest = PaletteSelector.FindClosestColor(color, targetPalette);
@@ -131,36 +162,38 @@ class Program
             else
                 colorScores[closest] = 1;
         }
-        
-        var finalRed = colorScores.Where(kvp => redishPalette.Contains(kvp.Key))
-            .OrderByDescending(kvp => kvp.Value).Select(kvp => kvp.Key).Take(3).ToList();
-        var finalGreen = colorScores.Where(kvp => greenishPalette.Contains(kvp.Key))
-            .OrderByDescending(kvp => kvp.Value).Select(kvp => kvp.Key).Take(3).ToList();
-        var finalBlue = colorScores.Where(kvp => blueishPalette.Contains(kvp.Key))
-            .OrderByDescending(kvp => kvp.Value).Select(kvp => kvp.Key).Take(3).ToList();
 
-        // Fill any empty slots if not enough colors were scored
-        while (finalRed.Count < 3 && redishPalette.Count > finalRed.Count)
+        // Select the top N scored colors for each channel based on the config
+        var finalRed = colorScores.Where(kvp => redishPalette.Contains(kvp.Key))
+            .OrderByDescending(kvp => kvp.Value).Select(kvp => kvp.Key).Take(config.RedShades - 1).ToList();
+        var finalGreen = colorScores.Where(kvp => greenishPalette.Contains(kvp.Key))
+            .OrderByDescending(kvp => kvp.Value).Select(kvp => kvp.Key).Take(config.GreenShades - 1).ToList();
+        var finalBlue = colorScores.Where(kvp => blueishPalette.Contains(kvp.Key))
+            .OrderByDescending(kvp => kvp.Value).Select(kvp => kvp.Key).Take(config.BlueShades - 1).ToList();
+
+        // Fill any empty slots if not enough colors were scored from the dominant set
+        while (finalRed.Count < config.RedShades - 1 && redishPalette.Count > finalRed.Count)
             finalRed.Add(redishPalette.First(c => !finalRed.Contains(c)));
-        while (finalGreen.Count < 3 && greenishPalette.Count > finalGreen.Count)
+        while (finalGreen.Count < config.GreenShades - 1 && greenishPalette.Count > finalGreen.Count)
             finalGreen.Add(greenishPalette.First(c => !finalGreen.Contains(c)));
-        while (finalBlue.Count < 3 && blueishPalette.Count > finalBlue.Count)
+        while (finalBlue.Count < config.BlueShades - 1 && blueishPalette.Count > finalBlue.Count)
             finalBlue.Add(blueishPalette.First(c => !finalBlue.Contains(c)));
 
-        return new Palette(
-            Black: Rgba32.ParseHex("#000000"),
-            RedDark: finalRed.Count > 0 ? finalRed[0] : new Rgba32(0,0,0),
-            RedNormal: finalRed.Count > 1 ? finalRed[1] : new Rgba32(0,0,0),
-            RedLight: finalRed.Count > 2 ? finalRed[2] : new Rgba32(0,0,0),
-            GreenDark: finalGreen.Count > 0 ? finalGreen[0] : new Rgba32(0,0,0),
-            GreenNormal: finalGreen.Count > 1 ? finalGreen[1] : new Rgba32(0,0,0),
-            GreenLight: finalGreen.Count > 2 ? finalGreen[2] : new Rgba32(0,0,0),
-            BlueDark: finalBlue.Count > 0 ? finalBlue[0] : new Rgba32(0,0,0),
-            BlueNormal: finalBlue.Count > 1 ? finalBlue[1] : new Rgba32(0,0,0),
-            BlueLight: finalBlue.Count > 2 ? finalBlue[2] : new Rgba32(0,0,0)
-        );
+        var black = Rgba32.ParseHex("#000000");
+
+        // Add black to each list, as it's a fundamental part of the combinations
+        finalRed.Insert(0, black);
+        finalGreen.Insert(0, black);
+        finalBlue.Insert(0, black);
+
+        return new Dictionary<ColorChannel, List<Rgba32>>
+        {
+            { ColorChannel.Red, finalRed },
+            { ColorChannel.Green, finalGreen },
+            { ColorChannel.Blue, finalBlue }
+        };
     }
-    
+
     // Hue-based color categorization
     static bool IsRedish(Rgba32 c) => PaletteSelector.RgbToHsl(c).H is >= 330 or < 30;
     static bool IsGreenish(Rgba32 c) => PaletteSelector.RgbToHsl(c).H is >= 70 and < 160;
@@ -198,63 +231,65 @@ class Program
         return results;
     }
 
-    /// <summary>
-    /// Finds the best combination using Beam Search.
-    /// Explores the top 'beamWidth' candidates at each step, offering a great balance of speed and quality.
-    /// </summary>
     static Rgba32[,] ComputeBestBlock(
         Rgba32 pixel,
         List<ChannelCombination> rCombs,
         List<ChannelCombination> gCombs,
         List<ChannelCombination> bCombs,
-        int beamWidth = 1024) // A width of 20-50 is usually a good sweet spot
+        int beamWidth = 1024)
     {
-        // We are trying to match the total sum of all 9 sub-pixels
         var targetTotalSum = new Vector3(pixel.R, pixel.G, pixel.B) * 9f;
 
-        // --- STEP 1: Find the Top K Red Candidates ---
-        // The 3 red sub-pixels should ideally contribute 3/9ths of the total color.
+        // --- The Beam Search heuristic can remain in fast RGB space ---
         var targetRSum = targetTotalSum * (3f / 9f);
-        
         var bestRs = rCombs
             .OrderBy(r => Vector3.DistanceSquared(r.ColorSum, targetRSum))
             .Take(beamWidth)
             .ToList();
 
-        // --- STEP 2: Expand to Red + Green ---
-        // Combine our top Red candidates with all Green possibilities.
-        // Together (3 Red + 2 Green), they should contribute 5/9ths of the total color.
         var targetRGSum = targetTotalSum * (5f / 9f);
-        var candidateRGs = new List<(ChannelCombination R, ChannelCombination G, Vector3 Sum)>(beamWidth * gCombs.Count);
-
-        foreach(var r in bestRs)
-        {
-            foreach(var g in gCombs)
-            {
+        var candidateRGs = new List<(ChannelCombination R, ChannelCombination G, Vector3 Sum)>();
+        foreach (var r in bestRs)
+            foreach (var g in gCombs)
                 candidateRGs.Add((r, g, r.ColorSum + g.ColorSum));
-            }
-        }
 
-        // Keep only the top K Red/Green pairs
         var topRGs = candidateRGs
             .OrderBy(rg => Vector3.DistanceSquared(rg.Sum, targetRGSum))
             .Take(beamWidth)
             .ToList();
 
-        // --- STEP 3: Finalize with Blue ---
-        // Check all Blue combinations against our surviving Red/Green pairs to find the global winner.
+        // --- STEP 3: Finalize with Blue using a perceptually accurate L*a*b* error metric ---
+
+        // THE KEY CHANGE IS HERE: We convert the target pixel to L*a*b* ONCE for comparison.
+        var targetLab = ColorConversion.ToLab(pixel);
+
         ChannelCombination bestR = rCombs[0];
         ChannelCombination bestG = gCombs[0];
         ChannelCombination bestB = bCombs[0];
         float minError = float.MaxValue;
 
-        foreach(var rg in topRGs)
+        foreach (var rg in topRGs)
         {
-            foreach(var b in bCombs)
+            foreach (var b in bCombs)
             {
                 var totalSum = rg.Sum + b.ColorSum;
-                float error = Vector3.DistanceSquared(totalSum, targetTotalSum);
-                
+
+                // Create the average color of the 3x3 block
+                var averageBlockColor = new Rgba32(
+                    (byte)(totalSum.X / 9f),
+                    (byte)(totalSum.Y / 9f),
+                    (byte)(totalSum.Z / 9f)
+                );
+
+                // Convert the block's average color to L*a*b*
+                var blockLab = ColorConversion.ToLab(averageBlockColor);
+
+                // Calculate error in L*a*b* space. This is the crucial improvement.
+                float error = Vector3.DistanceSquared(
+                    new Vector3(blockLab.L, blockLab.A, blockLab.B),
+                    new Vector3(targetLab.L, targetLab.A, targetLab.B)
+                );
+
                 if (error < minError)
                 {
                     minError = error;
@@ -265,7 +300,7 @@ class Program
             }
         }
 
-        // --- Fill the Block ---
+        // --- Fill the Block (this part is unchanged) ---
         Rgba32[,] block = new Rgba32[3, 3];
         block[0, 0] = bestR.Pixels[0];
         block[1, 0] = bestR.Pixels[1];
@@ -281,7 +316,7 @@ class Program
 
         return block;
     }
-    
+
     static Image<Rgba32> HardDownscale(Image<Rgba32> input, int factor)
     {
         int newW = input.Width / factor;
@@ -289,35 +324,28 @@ class Program
         var result = new Image<Rgba32>(newW, newH);
 
         for (int y = 0; y < newH; y++)
-        for (int x = 0; x < newW; x++)
-        {
-            float rSum = 0, gSum = 0, bSum = 0, aSum = 0;
-            int count = 0;
-
-            for (int dy = 0; dy < factor; dy++)
-            for (int dx = 0; dx < factor; dx++)
+            for (int x = 0; x < newW; x++)
             {
-                var px = input[x * factor + dx, y * factor + dy];
-                rSum += px.R;
-                gSum += px.G;
-                bSum += px.B;
-                aSum += px.A;
-                count++;
-            }
+                float rSum = 0, gSum = 0, bSum = 0, aSum = 0;
+                int count = 0;
 
-            result[x, y] = new Rgba32(
-                (byte)(rSum / count), 
-                (byte)(gSum / count), 
-                (byte)(bSum / count), 
-                (byte)(aSum / count));
-        }
+                for (int dy = 0; dy < factor; dy++)
+                    for (int dx = 0; dx < factor; dx++)
+                    {
+                        var px = input[x * factor + dx, y * factor + dy];
+                        rSum += px.R;
+                        gSum += px.G;
+                        bSum += px.B;
+                        aSum += px.A;
+                        count++;
+                    }
+
+                result[x, y] = new Rgba32(
+                    (byte)(rSum / count),
+                    (byte)(gSum / count),
+                    (byte)(bSum / count),
+                    (byte)(aSum / count));
+            }
         return result;
     }
 }
-
-public record Palette(
-    Rgba32 Black,
-    Rgba32 RedDark, Rgba32 RedNormal, Rgba32 RedLight,
-    Rgba32 GreenDark, Rgba32 GreenNormal, Rgba32 GreenLight,
-    Rgba32 BlueDark, Rgba32 BlueNormal, Rgba32 BlueLight
-);
