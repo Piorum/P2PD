@@ -207,7 +207,7 @@ class Program
         List<ChannelCombination> rCombs,
         List<ChannelCombination> gCombs,
         List<ChannelCombination> bCombs,
-        int beamWidth = 20) // A width of 20-50 is usually a good sweet spot
+        int beamWidth = 1024) // A width of 20-50 is usually a good sweet spot
     {
         // We are trying to match the total sum of all 9 sub-pixels
         var targetTotalSum = new Vector3(pixel.R, pixel.G, pixel.B) * 9f;
