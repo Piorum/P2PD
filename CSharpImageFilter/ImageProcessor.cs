@@ -440,6 +440,46 @@ namespace CSharpImageFilter
                             .ToList();
             return dedup;
         }
+        
+        public static float WarmthPenalty(in Vector3 labA, in Vector3 labB, float strength = 1.0f)
+        {
+            // Chroma (saturation) of the target color
+            float cA = MathF.Sqrt(labA.Y * labA.Y + labA.Z * labA.Z);
+
+            // This logic only applies to near-neutral target colors.
+            // A chroma of 25 is a good threshold.
+            if (cA > 25.0f)
+            {
+                return 0.0f;
+            }
+
+            // Calculate the difference in the b* (warmth) channel.
+            float db = labA.Z - labB.Z;
+
+            // The penalty is the squared difference, amplified by the strength.
+            // This adds directly to the (db*db) component of the main distance calculation.
+            return (db * db) * strength;
+        }
+
+        public static float GrayscalePenalty(in Vector3 labA, in Vector3 labB, float strength = 0.5f)
+        {
+            // Chroma (saturation) of the target color
+            float cA = MathF.Sqrt(labA.Y * labA.Y + labA.Z * labA.Z);
+
+            // This logic only applies if the target color is very desaturated.
+            // A chroma of 10 is a good threshold for what the eye perceives as "gray".
+            if (cA > 10.0f)
+            {
+                return 0.0f;
+            }
+
+            // The candidate's chroma (how colorful it is)
+            float cB = MathF.Sqrt(labB.Y * labB.Y + labB.Z * labB.Z);
+
+            // The penalty is the candidate's squared chroma. This heavily punishes
+            // any colorfulness when a grayscale color is desired.
+            return (cB * cB) * strength;
+        }
 
         // Add this as a new class member
         private static int[,,]? _paletteLut;
@@ -467,14 +507,20 @@ namespace CSharpImageFilter
                         var targetLab = new Vector3(l, a, b);
 
                         int bestIndex = -1;
-                        float bestDist = float.MaxValue;
+                        float bestScore = float.MaxValue;
 
                         for (int i = 0; i < _paletteLab.Count; i++)
                         {
-                            float dist = ColorUtils.LabDistanceSquared(_paletteLab[i], targetLab);
-                            if (dist < bestDist)
+                            var candidateLab = _paletteLab[i];
+                            float dist = ColorUtils.LabDistanceSquared(candidateLab, targetLab);
+
+                            float penalty = WarmthPenalty(targetLab, candidateLab);
+                            float grayscalePenalty = GrayscalePenalty(targetLab, candidateLab);
+
+                            float score = dist + penalty + grayscalePenalty;
+                            if (score < bestScore)
                             {
-                                bestDist = dist;
+                                bestScore = score;
                                 bestIndex = i;
                             }
                         }
@@ -556,7 +602,7 @@ namespace CSharpImageFilter
                         );
                         
                         int bestQuadIndex = -1;
-                        float bestDist = float.MaxValue;
+                        float bestScore = float.MaxValue;
                         
                         // 2a: Search a 3x3x3 block of grid cells around our target position.
                         // This ensures we find the true nearest neighbor even if it's in an adjacent cell.
@@ -573,10 +619,16 @@ namespace CSharpImageFilter
                                         // instead of the full 7,000.
                                         foreach(var index in quadIndices)
                                         {
-                                            float dist = ColorUtils.LabDistanceSquared(quadsLab[index], targetLab);
-                                            if (dist < bestDist)
+                                            var candidateLab = quadsLab[index];
+                                            float dist = ColorUtils.LabDistanceSquared(candidateLab, targetLab);
+
+                                            float penalty = WarmthPenalty(targetLab, candidateLab);
+                                            float grayscalePenalty = GrayscalePenalty(targetLab, candidateLab);
+
+                                            float score = dist + penalty + grayscalePenalty;
+                                            if (score < bestScore)
                                             {
-                                                bestDist = dist;
+                                                bestScore = score;
                                                 bestQuadIndex = index;
                                             }
                                         }

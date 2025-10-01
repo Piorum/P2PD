@@ -45,12 +45,12 @@ class Program
             NeighborhoodSize: 3,
             UseMultiPass: true,
             DarknessThreshold: 10f,
-            BlendRange: 0f,
+            BlendRange: 5f,
             BilateralFilter: new()
             {
-                Enabled = false,
-                Radius = 2,
-                ColorSigma = 3.0f
+                Enabled = true,
+                Radius = 1,
+                ColorSigma = 2.0f
             }
         );
 
