@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
@@ -97,15 +98,27 @@ namespace CSharpImageFilter
             // Generate quads with multiple layouts
             var quads = GenerateQuads(palette);
 
+            Stopwatch sw = new();
+            sw.Start();
             BuildLut(quads); 
+            sw.Stop();
+            Console.WriteLine($"Quad LUTs done in {sw.ElapsedMilliseconds}ms");
+
+            sw.Restart();
             BuildPaletteLut(palette);
+            sw.Stop();
+            Console.WriteLine($"Palette LUTs done in {sw.ElapsedMilliseconds}ms");
 
             using var src = Image.Load<Rgba32>(cfg.InputPath);
 
             // Downscale using simple box average
+            sw.Restart();
             using var down = HardDownscale(src, cfg.DownscaleFactor);
+            sw.Stop();
+            Console.WriteLine($"Downscale done in {sw.ElapsedMilliseconds}ms");
 
             // Optionally apply luminance bias to downscaled image (darken/lighten prior to matching)
+            sw.Restart();
             if (Math.Abs(cfg.LuminanceBias) > 1e-6f)
             {
                 ApplyLuminanceBias(down, cfg.LuminanceBias);
@@ -121,7 +134,10 @@ namespace CSharpImageFilter
                     downLab[x, y] = ColorUtils.ToLab(down[x, y]);
 
             var processedDownLab = ApplyBilateralFilter(downLab, cfg.BilateralFilter ?? new());
+            sw.Stop();
+            Console.WriteLine($"Preproccessing done in {sw.ElapsedMilliseconds}ms");
 
+            sw.Restart();
             // For each downscaled pixel, score all quads by neighborhood error and choose best
             Parallel.For(0, down.Height, y =>
             {
@@ -181,6 +197,8 @@ namespace CSharpImageFilter
                     output[outX + 1, outY + 1] = best.BottomRight;
                 }
             });
+            sw.Stop();
+            Console.WriteLine($"Init pass done in {sw.ElapsedMilliseconds}ms");
 
             if (!cfg.UseMultiPass)
             {
@@ -188,6 +206,7 @@ namespace CSharpImageFilter
                 return;
             }
 
+            sw.Restart();
             // Multi-pass: create a second pass biased darker and blend by per-pixel error
             using var outputB = new Image<Rgba32>(outSize.Width, outSize.Height);
             // darken downsample by extra bias and re-run selection quickly using same quads
@@ -253,7 +272,10 @@ namespace CSharpImageFilter
                     outputB[outX + 1, outY + 1] = best.BottomRight;
                 }
             });
+            sw.Stop();
+            Console.WriteLine($"Dark pass done in {sw.ElapsedMilliseconds}ms");
 
+            sw.Restart();
             // blend per-pixel choosing the lower Lab error to original downscaled pixel
             using var final = new Image<Rgba32>(outSize.Width, outSize.Height);
             float darknessThreshold = cfg.DarknessThreshold;
@@ -315,6 +337,8 @@ namespace CSharpImageFilter
                     }
                 }
             }
+            sw.Stop();
+            Console.WriteLine($"Blending done in {sw.ElapsedMilliseconds}ms");
 
             final.Save(cfg.OutputPath);
         }
@@ -483,36 +507,81 @@ namespace CSharpImageFilter
         private static void BuildLut(List<ColorQuad> quads, int size = 128)
         {
             _quadLut = new int[size, size, size];
-            
-            // Define the bounds of the Lab space we want to map
+            var quadsLab = quads.Select(q => q.LabAverage).ToList();
+
+            // --- STEP 1: Build the Spatial Acceleration Grid ---
+
+            // Define the coarseness of our search grid. 16^3 = 4096 cells. This is a good starting point.
+            const int grid_size = 16; 
+            var grid = new Dictionary<Vector3, List<int>>();
+
             const float lMin = 0f, lMax = 100f;
             const float aMin = -120f, aMax = 120f;
             const float bMin = -120f, bMax = 120f;
-
-            Parallel.For(0, size, z => // L dimension
+            
+            // 1a: Sort all quads into the coarse grid cells.
+            for(int i=0; i < quadsLab.Count; i++)
             {
-                for (int y = 0; y < size; y++) // a dimension
-                {
-                    for (int x = 0; x < size; x++) // b dimension
-                    {
-                        // Find the Lab color for the center of this LUT cell
-                        float l = lMin + (x + 0.5f) * (lMax - lMin) / size;
-                        float a = aMin + (y + 0.5f) * (aMax - aMin) / size;
-                        float b = bMin + (z + 0.5f) * (bMax - bMin) / size;
-                        var targetLab = new Vector3(l, a, b);
+                var lab = quadsLab[i];
+                var gridPos = new Vector3(
+                    (int)Math.Clamp((lab.X - lMin) / (lMax - lMin) * grid_size, 0, grid_size - 1),
+                    (int)Math.Clamp((lab.Y - aMin) / (aMax - aMin) * grid_size, 0, grid_size - 1),
+                    (int)Math.Clamp((lab.Z - bMin) / (bMax - bMin) * grid_size, 0, grid_size - 1)
+                );
 
-                        // Find the best quad for this color (the expensive search)
+                if (!grid.ContainsKey(gridPos))
+                {
+                    grid[gridPos] = new List<int>();
+                }
+                grid[gridPos].Add(i);
+            }
+
+            // --- STEP 2: Populate the LUT using the Grid ---
+            Parallel.For(0, size, z =>
+            {
+                for (int y = 0; y < size; y++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        var targetLab = new Vector3(
+                            lMin + (x + 0.5f) * (lMax - lMin) / size,
+                            aMin + (y + 0.5f) * (aMax - aMin) / size,
+                            bMin + (z + 0.5f) * (bMax - bMin) / size
+                        );
+
+                        var gridPos = new Vector3(
+                            (int)Math.Clamp((targetLab.X - lMin) / (lMax - lMin) * grid_size, 0, grid_size - 1),
+                            (int)Math.Clamp((targetLab.Y - aMin) / (aMax - aMin) * grid_size, 0, grid_size - 1),
+                            (int)Math.Clamp((targetLab.Z - bMin) / (bMax - bMin) * grid_size, 0, grid_size - 1)
+                        );
+                        
                         int bestQuadIndex = -1;
                         float bestDist = float.MaxValue;
-
-                        for (int i = 0; i < quads.Count; i++)
+                        
+                        // 2a: Search a 3x3x3 block of grid cells around our target position.
+                        // This ensures we find the true nearest neighbor even if it's in an adjacent cell.
+                        for (int dz = -1; dz <= 1; dz++)
                         {
-                            // For the LUT, we use a simplified scoring: just the distance to the average.
-                            float dist = ColorUtils.LabDistanceSquared(quads[i].LabAverage, targetLab);
-                            if (dist < bestDist)
+                            for (int dy = -1; dy <= 1; dy++)
                             {
-                                bestDist = dist;
-                                bestQuadIndex = i;
+                                for (int dx = -1; dx <= 1; dx++)
+                                {
+                                    var searchPos = new Vector3(gridPos.X + dx, gridPos.Y + dy, gridPos.Z + dz);
+                                    if(grid.TryGetValue(searchPos, out var quadIndices))
+                                    {
+                                        // THIS IS THE KEY: We now loop over a tiny list (e.g., 1-50 quads)
+                                        // instead of the full 7,000.
+                                        foreach(var index in quadIndices)
+                                        {
+                                            float dist = ColorUtils.LabDistanceSquared(quadsLab[index], targetLab);
+                                            if (dist < bestDist)
+                                            {
+                                                bestDist = dist;
+                                                bestQuadIndex = index;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         _quadLut[x, y, z] = bestQuadIndex;

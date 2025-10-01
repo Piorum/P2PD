@@ -38,18 +38,19 @@ class Program
         var config = new DitheringConfig(
             InputPath: "input.png",
             OutputPath: "output.png",
-            DownscaleFactor: 2,
+            DownscaleFactor: 6,
             CustomPalette: palette,
-            NeighborhoodSize: 3,
-            CenterWeight: 0.8f,
-            UseMultiPass: true,
+            CenterWeight: 1.0f,
             LuminanceBias: 0.0f,
-            DarknessThreshold: 35f,
-            BlendRange: 10f,
+            NeighborhoodSize: 3,
+            UseMultiPass: true,
+            DarknessThreshold: 10f,
+            BlendRange: 0f,
             BilateralFilter: new()
             {
-                Radius = 3,
-                ColorSigma = 4.0f
+                Enabled = false,
+                Radius = 2,
+                ColorSigma = 3.0f
             }
         );
 
@@ -59,6 +60,6 @@ class Program
         QuadDitherProcessor.ProcessImage(config);
         sw.Stop();
 
-        Console.WriteLine($"Done in {sw.ElapsedMilliseconds}ms");
+        Console.WriteLine($"Total done in {sw.ElapsedMilliseconds}ms");
     }
 }
