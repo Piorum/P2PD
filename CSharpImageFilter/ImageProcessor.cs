@@ -8,6 +8,7 @@ using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.PixelFormats;
 
 namespace CSharpImageFilter
@@ -92,6 +93,12 @@ namespace CSharpImageFilter
 
     public static class QuadDitherProcessor
     {
+        private static readonly WebpEncoder webpEncoder = new()
+        {
+            FileFormat = WebpFileFormatType.Lossless,
+            Quality = 100
+        };
+
         public static void ProcessImage(DitheringConfig cfg)
         {
             var palette = cfg.CustomPalette ?? throw new ArgumentException("Palette required");
@@ -102,7 +109,7 @@ namespace CSharpImageFilter
 
             Stopwatch sw = new();
             sw.Start();
-            BuildLut(quads, cfg); 
+            BuildLut(quads, cfg);
             sw.Stop();
             Console.WriteLine($"Quad LUTs done in {sw.ElapsedMilliseconds}ms");
 
@@ -156,7 +163,7 @@ namespace CSharpImageFilter
                         output[ox + 1, oy + 1] = new Rgba32(0, 0, 0, 0);
                         continue;
                     }
-                    
+
                     float centerWeight = cfg.CenterWeight; // Good value to start experimenting with
 
                     var neighborhood = GatherNeighborhood(processedDownLab, x, y, cfg.NeighborhoodSize);
@@ -180,7 +187,7 @@ namespace CSharpImageFilter
                             // For this use case, averaging all and then blending is mathematically sound and simpler.
                             neighborSum += neighborhood[i];
                         }
-                        
+
                         Vector3 fullAverage = neighborSum / neighborhood.Length;
 
                         // Linearly interpolate between the full average and the center pixel's color
@@ -204,7 +211,7 @@ namespace CSharpImageFilter
 
             if (!cfg.UseMultiPass)
             {
-                output.Save(cfg.OutputPath);
+                output.Save(cfg.OutputPath, webpEncoder);
                 return;
             }
 
@@ -256,7 +263,7 @@ namespace CSharpImageFilter
                             // For this use case, averaging all and then blending is mathematically sound and simpler.
                             neighborSum += neighborhood[i];
                         }
-                        
+
                         Vector3 fullAverage = neighborSum / neighborhood.Length;
 
                         // Linearly interpolate between the full average and the center pixel's color
@@ -293,8 +300,8 @@ namespace CSharpImageFilter
                     if (down[x, y].A == 0) // Handle transparency
                     {
                         for (int sy = 0; sy < 2; sy++)
-                        for (int sx = 0; sx < 2; sx++)
-                            final[ox + sx, oy + sy] = new Rgba32(0, 0, 0, 0);
+                            for (int sx = 0; sx < 2; sx++)
+                                final[ox + sx, oy + sy] = new Rgba32(0, 0, 0, 0);
                         continue;
                     }
 
@@ -313,36 +320,36 @@ namespace CSharpImageFilter
                     }
 
                     for (int sy = 0; sy < 2; sy++)
-                    for (int sx = 0; sx < 2; sx++)
-                    {
-                        var colorA = output[ox + sx, oy + sy];
-                        var colorB = outputB[ox + sx, oy + sy];
+                        for (int sx = 0; sx < 2; sx++)
+                        {
+                            var colorA = output[ox + sx, oy + sy];
+                            var colorB = outputB[ox + sx, oy + sy];
 
-                        if (blendFactor <= 0.01f)
-                        {
-                            final[ox + sx, oy + sy] = colorA;
+                            if (blendFactor <= 0.01f)
+                            {
+                                final[ox + sx, oy + sy] = colorA;
+                            }
+                            else if (blendFactor >= 0.99f)
+                            {
+                                final[ox + sx, oy + sy] = colorB;
+                            }
+                            else
+                            {
+                                // Blend in Lab space for perceptual accuracy
+                                var labA = ColorUtils.ToLab(colorA);
+                                var labB = ColorUtils.ToLab(colorB);
+                                var blendedLab = Vector3.Lerp(labA, labB, blendFactor);
+
+                                // Snap the blended result to the nearest true palette color
+                                final[ox + sx, oy + sy] = GetNearestPaletteColor(blendedLab, palette);
+                            }
                         }
-                        else if (blendFactor >= 0.99f)
-                        {
-                            final[ox + sx, oy + sy] = colorB;
-                        }
-                        else
-                        {
-                            // Blend in Lab space for perceptual accuracy
-                            var labA = ColorUtils.ToLab(colorA);
-                            var labB = ColorUtils.ToLab(colorB);
-                            var blendedLab = Vector3.Lerp(labA, labB, blendFactor);
-                            
-                            // Snap the blended result to the nearest true palette color
-                            final[ox + sx, oy + sy] = GetNearestPaletteColor(blendedLab, palette);
-                        }
-                    }
                 }
             }
             sw.Stop();
             Console.WriteLine($"Blending done in {sw.ElapsedMilliseconds}ms");
 
-            final.Save(cfg.OutputPath);
+            final.Save(cfg.OutputPath, webpEncoder);
         }
         
         // A new preprocessing step to apply a bilateral filter on the Lab image data.

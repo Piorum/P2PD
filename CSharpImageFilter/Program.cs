@@ -33,13 +33,19 @@ class Program
             Rgba32.ParseHex("#6d643f"), Rgba32.ParseHex("#948c6b"), Rgba32.ParseHex("#cdc59e"),
         };
 
+        var sortedPalette = palette
+            .OrderBy(c => c.R)
+            .ThenBy(c => c.G)
+            .ThenBy(c => c.B)
+            .ToList();
+
         // 3. Create the configuration object, passing your custom palette.
         //    The 'PaletteSize' parameter will now be ignored.
         var config = new DitheringConfig(
             InputPath: "input.png",
-            OutputPath: "output.png",
+            OutputPath: "output.webp",
             DownscaleFactor: 3,
-            CustomPalette: palette,
+            CustomPalette: sortedPalette,
             CenterWeight: 1.0f,
             LuminanceBias: 0.0f,
             NeighborhoodSize: 3,

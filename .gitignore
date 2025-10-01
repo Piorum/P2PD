@@ -1,5 +1,6 @@
 *.txt
 *.env
 *.png
+*.webp
 bin/
 obj/
