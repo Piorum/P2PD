@@ -37,8 +37,11 @@ class Program
         var config = new DitheringConfig(
             InputPath: "input.png",
             OutputPath: "output.png",
-            DownscaleFactor: 2,
-            CustomPalette: palette
+            DownscaleFactor: 4,
+            CustomPalette: palette,
+            NeighborhoodSize: 0,
+            UseMultiPass: true,
+            LuminanceBias: 0.0f
         );
 
         // 4. Call the processing method. It will now use your predefined colors.

@@ -111,6 +111,18 @@ namespace CSharpImageFilter
             {
                 for (int x = 0; x < down.Width; x++)
                 {
+                    // If the downscaled pixel is transparent, keep it transparent in the output.
+                    if (down[x, y].A == 0)
+                    {
+                        int ox = x * 2;
+                        int oy = y * 2;
+                        output[ox, oy] = new Rgba32(0, 0, 0, 0);
+                        output[ox + 1, oy] = new Rgba32(0, 0, 0, 0);
+                        output[ox, oy + 1] = new Rgba32(0, 0, 0, 0);
+                        output[ox + 1, oy + 1] = new Rgba32(0, 0, 0, 0);
+                        continue;
+                    }
+
                     // gather neighborhood target labs
                     var neighborhood = GatherNeighborhood(downLab, x, y, cfg.NeighborhoodSize);
 
@@ -129,12 +141,12 @@ namespace CSharpImageFilter
                     }
 
                     // write quad into output
-                    int ox = x * 2;
-                    int oy = y * 2;
-                    output[ox, oy] = best.TopLeft;
-                    output[ox + 1, oy] = best.TopRight;
-                    output[ox, oy + 1] = best.BottomLeft;
-                    output[ox + 1, oy + 1] = best.BottomRight;
+                    int outX = x * 2;
+                    int outY = y * 2;
+                    output[outX, outY] = best.TopLeft;
+                    output[outX + 1, outY] = best.TopRight;
+                    output[outX, outY + 1] = best.BottomLeft;
+                    output[outX + 1, outY + 1] = best.BottomRight;
                 }
             });
 
@@ -157,6 +169,17 @@ namespace CSharpImageFilter
             {
                 for (int x = 0; x < downDark.Width; x++)
                 {
+                    if (downDark[x, y].A == 0)
+                    {
+                        int ox = x * 2;
+                        int oy = y * 2;
+                        outputB[ox, oy] = new Rgba32(0, 0, 0, 0);
+                        outputB[ox + 1, oy] = new Rgba32(0, 0, 0, 0);
+                        outputB[ox, oy + 1] = new Rgba32(0, 0, 0, 0);
+                        outputB[ox + 1, oy + 1] = new Rgba32(0, 0, 0, 0);
+                        continue;
+                    }
+
                     var neighborhood = GatherNeighborhood(downDarkLab, x, y, cfg.NeighborhoodSize);
                     ColorQuad best = default;
                     float bestScore = float.MaxValue;
@@ -169,12 +192,12 @@ namespace CSharpImageFilter
                             best = q;
                         }
                     }
-                    int ox = x * 2;
-                    int oy = y * 2;
-                    outputB[ox, oy] = best.TopLeft;
-                    outputB[ox + 1, oy] = best.TopRight;
-                    outputB[ox, oy + 1] = best.BottomLeft;
-                    outputB[ox + 1, oy + 1] = best.BottomRight;
+                    int outX = x * 2;
+                    int outY = y * 2;
+                    outputB[outX, outY] = best.TopLeft;
+                    outputB[outX + 1, outY] = best.TopRight;
+                    outputB[outX, outY + 1] = best.BottomLeft;
+                    outputB[outX + 1, outY + 1] = best.BottomRight;
                 }
             });
 
@@ -186,6 +209,16 @@ namespace CSharpImageFilter
                 {
                     int ox = x * 2;
                     int oy = y * 2;
+
+                    if (down[x, y].A == 0)
+                    {
+                        final[ox, oy] = new Rgba32(0, 0, 0, 0);
+                        final[ox + 1, oy] = new Rgba32(0, 0, 0, 0);
+                        final[ox, oy + 1] = new Rgba32(0, 0, 0, 0);
+                        final[ox + 1, oy + 1] = new Rgba32(0, 0, 0, 0);
+                        continue;
+                    }
+
                     // for each subpixel choose output or outputB based on Lab distance to original (no bias)
                     var origNeighborhood = GatherNeighborhood(downLab, x, y, 0); // single target lab
 
@@ -332,15 +365,42 @@ namespace CSharpImageFilter
             for (int x = 0; x < newW; x++)
             {
                 float r=0,g=0,b=0,a=0; int count=0;
+                int transparentCount = 0;
+
                 for (int dy=0; dy<factor; dy++)
                 for (int dx=0; dx<factor; dx++)
                 {
                     int sx = x * factor + dx; int sy = y * factor + dy;
                     if (sx >= input.Width || sy >= input.Height) continue;
+
                     var px = input[sx, sy];
-                    r += px.R; g += px.G; b += px.B; a += px.A; count++;
+                    if (px.A == 0)
+                    {
+                        transparentCount++;
+                    }
+                    else
+                    {
+                        r += px.R; g += px.G; b += px.B; a += px.A;
+                    }
+                    count++;
                 }
-                result[x,y] = new Rgba32((byte)(r/count),(byte)(g/count),(byte)(b/count),(byte)(a/count));
+
+                if (count == transparentCount)
+                {
+                    result[x, y] = new Rgba32(0, 0, 0, 0);
+                }
+                else
+                {
+                    int opaqueCount = count - transparentCount;
+                    if (opaqueCount > 0)
+                    {
+                        result[x, y] = new Rgba32((byte)(r / opaqueCount), (byte)(g / opaqueCount), (byte)(b / opaqueCount), (byte)(a / opaqueCount));
+                    }
+                    else
+                    {
+                        result[x, y] = new Rgba32(0, 0, 0, 0);
+                    }
+                }
             }
             return result;
         }
