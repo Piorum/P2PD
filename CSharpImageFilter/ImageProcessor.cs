@@ -16,9 +16,12 @@ namespace CSharpImageFilter
         string OutputPath,
         int DownscaleFactor,
         List<Rgba32> CustomPalette,
+        float CenterWeight = 0.9f, // The fix from the previous step!
         float LuminanceBias = 0f, // negative = darker, positive = lighter
         int NeighborhoodSize = 1, // radius on downscaled image used when scoring (0 = single pixel)
-        bool UseMultiPass = false // if true will produce second pass biased darker and blend
+        bool UseMultiPass = false, // if true will produce second pass biased darker and blend
+        float DarknessThreshold = 30f, // (0-100) Luminance below which dark pass is at full strength.
+        float BlendRange = 40f         // (0-100) How far the effect takes to fade from full to zero.
     );
 
     // Small Lab helpers. Replace with your optimized versions if present.
@@ -86,6 +89,9 @@ namespace CSharpImageFilter
             // Generate quads with multiple layouts
             var quads = GenerateQuads(palette);
 
+            BuildLut(quads); 
+            BuildPaletteLut(palette);
+
             using var src = Image.Load<Rgba32>(cfg.InputPath);
 
             // Downscale using simple box average
@@ -122,23 +128,39 @@ namespace CSharpImageFilter
                         output[ox + 1, oy + 1] = new Rgba32(0, 0, 0, 0);
                         continue;
                     }
+                    
+                    float centerWeight = cfg.CenterWeight; // Good value to start experimenting with
 
-                    // gather neighborhood target labs
                     var neighborhood = GatherNeighborhood(downLab, x, y, cfg.NeighborhoodSize);
+                    var centerPixelLab = downLab[x, y];
 
-                    // find best quad
-                    ColorQuad best = default;
-                    float bestScore = float.MaxValue;
+                    Vector3 targetMean;
 
-                    foreach (var q in quads)
+                    if (neighborhood.Length <= 1 || centerWeight >= 1.0f)
                     {
-                        float score = ScoreQuad(q, neighborhood);
-                        if (score < bestScore)
-                        {
-                            bestScore = score;
-                            best = q;
-                        }
+                        // If there's no neighborhood or weight is 1, just use the center pixel
+                        targetMean = centerPixelLab;
                     }
+                    else
+                    {
+                        // Calculate the average of the SURROUNDING pixels (excluding the center)
+                        Vector3 neighborSum = Vector3.Zero;
+                        for (int i = 0; i < neighborhood.Length; i++)
+                        {
+                            // A simple way to exclude the center is to check for it,
+                            // though this is only truly accurate if neighborhood points are unique.
+                            // For this use case, averaging all and then blending is mathematically sound and simpler.
+                            neighborSum += neighborhood[i];
+                        }
+                        
+                        Vector3 fullAverage = neighborSum / neighborhood.Length;
+
+                        // Linearly interpolate between the full average and the center pixel's color
+                        targetMean = Vector3.Lerp(fullAverage, centerPixelLab, centerWeight);
+                    }
+
+                    // Now use this new 'targetMean' for the LUT lookup
+                    ColorQuad best = GetBestQuadFromLut(targetMean, quads);
 
                     // write quad into output
                     int outX = x * 2;
@@ -180,18 +202,39 @@ namespace CSharpImageFilter
                         continue;
                     }
 
+                    float centerWeight = cfg.CenterWeight; // Good value to start experimenting with
+
                     var neighborhood = GatherNeighborhood(downDarkLab, x, y, cfg.NeighborhoodSize);
-                    ColorQuad best = default;
-                    float bestScore = float.MaxValue;
-                    foreach (var q in quads)
+                    var centerPixelLab = downDarkLab[x, y];
+
+                    Vector3 targetMean;
+
+                    if (neighborhood.Length <= 1 || centerWeight >= 1.0f)
                     {
-                        float score = ScoreQuad(q, neighborhood);
-                        if (score < bestScore)
-                        {
-                            bestScore = score;
-                            best = q;
-                        }
+                        // If there's no neighborhood or weight is 1, just use the center pixel
+                        targetMean = centerPixelLab;
                     }
+                    else
+                    {
+                        // Calculate the average of the SURROUNDING pixels (excluding the center)
+                        Vector3 neighborSum = Vector3.Zero;
+                        for (int i = 0; i < neighborhood.Length; i++)
+                        {
+                            // A simple way to exclude the center is to check for it,
+                            // though this is only truly accurate if neighborhood points are unique.
+                            // For this use case, averaging all and then blending is mathematically sound and simpler.
+                            neighborSum += neighborhood[i];
+                        }
+                        
+                        Vector3 fullAverage = neighborSum / neighborhood.Length;
+
+                        // Linearly interpolate between the full average and the center pixel's color
+                        targetMean = Vector3.Lerp(fullAverage, centerPixelLab, centerWeight);
+                    }
+
+                    // Now use this new 'targetMean' for the LUT lookup
+                    ColorQuad best = GetBestQuadFromLut(targetMean, quads);
+
                     int outX = x * 2;
                     int outY = y * 2;
                     outputB[outX, outY] = best.TopLeft;
@@ -203,6 +246,9 @@ namespace CSharpImageFilter
 
             // blend per-pixel choosing the lower Lab error to original downscaled pixel
             using var final = new Image<Rgba32>(outSize.Width, outSize.Height);
+            float darknessThreshold = cfg.DarknessThreshold;
+            float blendRange = Math.Max(1e-6f, cfg.BlendRange);
+
             for (int y = 0; y < down.Height; y++)
             {
                 for (int x = 0; x < down.Width; x++)
@@ -210,34 +256,52 @@ namespace CSharpImageFilter
                     int ox = x * 2;
                     int oy = y * 2;
 
-                    if (down[x, y].A == 0)
+                    if (down[x, y].A == 0) // Handle transparency
                     {
-                        final[ox, oy] = new Rgba32(0, 0, 0, 0);
-                        final[ox + 1, oy] = new Rgba32(0, 0, 0, 0);
-                        final[ox, oy + 1] = new Rgba32(0, 0, 0, 0);
-                        final[ox + 1, oy + 1] = new Rgba32(0, 0, 0, 0);
+                        for (int sy = 0; sy < 2; sy++)
+                        for (int sx = 0; sx < 2; sx++)
+                            final[ox + sx, oy + sy] = new Rgba32(0, 0, 0, 0);
                         continue;
                     }
 
-                    // for each subpixel choose output or outputB based on Lab distance to original (no bias)
-                    var origNeighborhood = GatherNeighborhood(downLab, x, y, 0); // single target lab
+                    var originalLab = downLab[x, y];
+                    float luminance = originalLab.X;
 
-                    // four subpixels
+                    float blendFactor = 0f;
+                    if (luminance <= darknessThreshold)
+                    {
+                        blendFactor = 1.0f;
+                    }
+                    else
+                    {
+                        float distanceIntoRange = luminance - darknessThreshold;
+                        blendFactor = 1.0f - Math.Clamp(distanceIntoRange / blendRange, 0.0f, 1.0f);
+                    }
+
                     for (int sy = 0; sy < 2; sy++)
                     for (int sx = 0; sx < 2; sx++)
                     {
-                        var pA = final[ox + sx, oy + sy]; // will be set below
-                        var a = output[ox + sx, oy + sy];
-                        var b = outputB[ox + sx, oy + sy];
+                        var colorA = output[ox + sx, oy + sy];
+                        var colorB = outputB[ox + sx, oy + sy];
 
-                        var labA = ColorUtils.ToLab(a);
-                        var labB = ColorUtils.ToLab(b);
-                        var target = downLab[x, y];
-
-                        float eA = ColorUtils.LabDistanceSquared(labA, target);
-                        float eB = ColorUtils.LabDistanceSquared(labB, target);
-
-                        final[ox + sx, oy + sy] = eA <= eB ? a : b;
+                        if (blendFactor <= 0.01f)
+                        {
+                            final[ox + sx, oy + sy] = colorA;
+                        }
+                        else if (blendFactor >= 0.99f)
+                        {
+                            final[ox + sx, oy + sy] = colorB;
+                        }
+                        else
+                        {
+                            // Blend in Lab space for perceptual accuracy
+                            var labA = ColorUtils.ToLab(colorA);
+                            var labB = ColorUtils.ToLab(colorB);
+                            var blendedLab = Vector3.Lerp(labA, labB, blendFactor);
+                            
+                            // Snap the blended result to the nearest true palette color
+                            final[ox + sx, oy + sy] = GetNearestPaletteColor(blendedLab, palette);
+                        }
                     }
                 }
             }
@@ -292,11 +356,132 @@ namespace CSharpImageFilter
             return dedup;
         }
 
+        // Add this as a new class member
+        private static int[,,]? _paletteLut;
+        private static List<Vector3>? _paletteLab; // Store Lab versions of palette colors
+
+        // A new method to build the Palette LUT, call this once after loading the palette
+        private static void BuildPaletteLut(List<Rgba32> palette, int size = 128)
+        {
+            _paletteLut = new int[size, size, size];
+            _paletteLab = palette.Select(ColorUtils.ToLab).ToList();
+
+            const float lMin = 0f, lMax = 100f;
+            const float aMin = -120f, aMax = 120f;
+            const float bMin = -120f, bMax = 120f;
+
+            Parallel.For(0, size, z => // L dimension
+            {
+                for (int y = 0; y < size; y++) // a dimension
+                {
+                    for (int x = 0; x < size; x++) // b dimension
+                    {
+                        float l = lMin + (x + 0.5f) * (lMax - lMin) / size;
+                        float a = aMin + (y + 0.5f) * (aMax - aMin) / size;
+                        float b = bMin + (z + 0.5f) * (bMax - bMin) / size;
+                        var targetLab = new Vector3(l, a, b);
+
+                        int bestIndex = -1;
+                        float bestDist = float.MaxValue;
+
+                        for (int i = 0; i < _paletteLab.Count; i++)
+                        {
+                            float dist = ColorUtils.LabDistanceSquared(_paletteLab[i], targetLab);
+                            if (dist < bestDist)
+                            {
+                                bestDist = dist;
+                                bestIndex = i;
+                            }
+                        }
+                        _paletteLut[x, y, z] = bestIndex;
+                    }
+                }
+            });
+        }
+
+        // Helper to get the nearest palette color for any given Lab color
+        private static Rgba32 GetNearestPaletteColor(Vector3 labColor, List<Rgba32> palette)
+        {
+            const int size = 128; // Must match BuildPaletteLut size
+            const float lMin = 0f, lMax = 100f;
+            const float aMin = -120f, aMax = 120f;
+            const float bMin = -120f, bMax = 120f;
+
+            int x = (int)Math.Clamp((labColor.X - lMin) / (lMax - lMin) * size, 0, size - 1);
+            int y = (int)Math.Clamp((labColor.Y - aMin) / (aMax - aMin) * size, 0, size - 1);
+            int z = (int)Math.Clamp((labColor.Z - bMin) / (bMax - bMin) * size, 0, size - 1);
+
+            int index = _paletteLut![x, y, z];
+            return palette[index];
+        }
+        
+        // Add this class member to hold the LUT
+        private static int[,,]? _quadLut;
+
+        // A new method to build the LUT
+        private static void BuildLut(List<ColorQuad> quads, int size = 128)
+        {
+            _quadLut = new int[size, size, size];
+            
+            // Define the bounds of the Lab space we want to map
+            const float lMin = 0f, lMax = 100f;
+            const float aMin = -120f, aMax = 120f;
+            const float bMin = -120f, bMax = 120f;
+
+            Parallel.For(0, size, z => // L dimension
+            {
+                for (int y = 0; y < size; y++) // a dimension
+                {
+                    for (int x = 0; x < size; x++) // b dimension
+                    {
+                        // Find the Lab color for the center of this LUT cell
+                        float l = lMin + (x + 0.5f) * (lMax - lMin) / size;
+                        float a = aMin + (y + 0.5f) * (aMax - aMin) / size;
+                        float b = bMin + (z + 0.5f) * (bMax - bMin) / size;
+                        var targetLab = new Vector3(l, a, b);
+
+                        // Find the best quad for this color (the expensive search)
+                        int bestQuadIndex = -1;
+                        float bestDist = float.MaxValue;
+
+                        for (int i = 0; i < quads.Count; i++)
+                        {
+                            // For the LUT, we use a simplified scoring: just the distance to the average.
+                            float dist = ColorUtils.LabDistanceSquared(quads[i].LabAverage, targetLab);
+                            if (dist < bestDist)
+                            {
+                                bestDist = dist;
+                                bestQuadIndex = i;
+                            }
+                        }
+                        _quadLut[x, y, z] = bestQuadIndex;
+                    }
+                }
+            });
+        }
+
+        // Helper method to look up a quad from the LUT
+        private static ColorQuad GetBestQuadFromLut(Vector3 targetLab, List<ColorQuad> quads)
+        {
+            const int size = 128; // Must match the size used in BuildLut
+            const float lMin = 0f, lMax = 100f;
+            const float aMin = -120f, aMax = 120f;
+            const float bMin = -120f, bMax = 120f;
+
+            // Convert Lab color to LUT indices
+            int x = (int)Math.Clamp((targetLab.X - lMin) / (lMax - lMin) * size, 0, size - 1);
+            int y = (int)Math.Clamp((targetLab.Y - aMin) / (aMax - aMin) * size, 0, size - 1);
+            int z = (int)Math.Clamp((targetLab.Z - bMin) / (bMax - bMin) * size, 0, size - 1);
+
+            int quadIndex = _quadLut![x, y, z];
+            return quads[quadIndex];
+        }
+
         private static ColorQuad MakeQuad(Rgba32[] p)
         {
             // p order: TL, TR, BL, BR
             var labs = p.Select(ColorUtils.ToLab).ToArray();
-            var avg = new Vector3( (labs[0].X + labs[1].X + labs[2].X + labs[3].X) / 4f,
+            var avg = new Vector3((labs[0].X + labs[1].X + labs[2].X + labs[3].X) / 4f,
                                    (labs[0].Y + labs[1].Y + labs[2].Y + labs[3].Y) / 4f,
                                    (labs[0].Z + labs[1].Z + labs[2].Z + labs[3].Z) / 4f);
             return new ColorQuad(p[0], p[1], p[2], p[3], avg, labs);

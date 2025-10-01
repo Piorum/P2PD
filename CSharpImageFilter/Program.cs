@@ -1,4 +1,5 @@
-﻿using CSharpImageFilter;
+﻿using System.Diagnostics;
+using CSharpImageFilter;
 using SixLabors.ImageSharp.PixelFormats;
 
 class Program
@@ -37,14 +38,22 @@ class Program
         var config = new DitheringConfig(
             InputPath: "input.png",
             OutputPath: "output.png",
-            DownscaleFactor: 4,
+            DownscaleFactor: 2,
             CustomPalette: palette,
-            NeighborhoodSize: 0,
+            NeighborhoodSize: 3,
+            CenterWeight: 0.8f,
             UseMultiPass: true,
-            LuminanceBias: 0.0f
+            LuminanceBias: 0.0f,
+            DarknessThreshold: 35f,
+            BlendRange: 10f
         );
 
+        Stopwatch sw = new();
+        sw.Start();
         // 4. Call the processing method. It will now use your predefined colors.
         QuadDitherProcessor.ProcessImage(config);
+        sw.Stop();
+
+        Console.WriteLine($"Done in {sw.ElapsedMilliseconds}ms");
     }
 }
