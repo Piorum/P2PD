@@ -14,9 +14,9 @@ namespace CSharpImageFilter
 {
     public record BilateralFilterConfig(
         bool Enabled = true,
-        int Radius = 2,
-        float SpatialSigma = 2.0f,
-        float ColorSigma = 10.0f
+        int Radius = 2, //how many pixels effect calculation
+        float SpatialSigma = 2.0f, //how highly far pixels effect calculation
+        float ColorSigma = 10.0f //threshold for similar colors
     );
 
     public record DitheringConfig(
@@ -30,7 +30,9 @@ namespace CSharpImageFilter
         bool UseMultiPass = false, // if true will produce second pass biased darker and blend
         float DarknessThreshold = 30f, // (0-100) Luminance below which dark pass is at full strength.
         float BlendRange = 40f,         // (0-100) How far the effect takes to fade from full to zero.
-        BilateralFilterConfig? BilateralFilter = null 
+        BilateralFilterConfig? BilateralFilter = null,
+        float WarmthPenalty = 1.0f,
+        float GrayscalePenalty = 0.5f
     );
 
     // Small Lab helpers. Replace with your optimized versions if present.
@@ -100,12 +102,12 @@ namespace CSharpImageFilter
 
             Stopwatch sw = new();
             sw.Start();
-            BuildLut(quads); 
+            BuildLut(quads, cfg); 
             sw.Stop();
             Console.WriteLine($"Quad LUTs done in {sw.ElapsedMilliseconds}ms");
 
             sw.Restart();
-            BuildPaletteLut(palette);
+            BuildPaletteLut(palette, cfg);
             sw.Stop();
             Console.WriteLine($"Palette LUTs done in {sw.ElapsedMilliseconds}ms");
 
@@ -486,7 +488,7 @@ namespace CSharpImageFilter
         private static List<Vector3>? _paletteLab; // Store Lab versions of palette colors
 
         // A new method to build the Palette LUT, call this once after loading the palette
-        private static void BuildPaletteLut(List<Rgba32> palette, int size = 128)
+        private static void BuildPaletteLut(List<Rgba32> palette, DitheringConfig cfg, int size = 128)
         {
             _paletteLut = new int[size, size, size];
             _paletteLab = palette.Select(ColorUtils.ToLab).ToList();
@@ -514,8 +516,8 @@ namespace CSharpImageFilter
                             var candidateLab = _paletteLab[i];
                             float dist = ColorUtils.LabDistanceSquared(candidateLab, targetLab);
 
-                            float penalty = WarmthPenalty(targetLab, candidateLab);
-                            float grayscalePenalty = GrayscalePenalty(targetLab, candidateLab);
+                            float penalty = WarmthPenalty(targetLab, candidateLab, strength: cfg.WarmthPenalty);
+                            float grayscalePenalty = GrayscalePenalty(targetLab, candidateLab, strength: cfg.GrayscalePenalty);
 
                             float score = dist + penalty + grayscalePenalty;
                             if (score < bestScore)
@@ -550,7 +552,7 @@ namespace CSharpImageFilter
         private static int[,,]? _quadLut;
 
         // A new method to build the LUT
-        private static void BuildLut(List<ColorQuad> quads, int size = 128)
+        private static void BuildLut(List<ColorQuad> quads, DitheringConfig cfg, int size = 128)
         {
             _quadLut = new int[size, size, size];
             var quadsLab = quads.Select(q => q.LabAverage).ToList();
@@ -622,8 +624,8 @@ namespace CSharpImageFilter
                                             var candidateLab = quadsLab[index];
                                             float dist = ColorUtils.LabDistanceSquared(candidateLab, targetLab);
 
-                                            float penalty = WarmthPenalty(targetLab, candidateLab);
-                                            float grayscalePenalty = GrayscalePenalty(targetLab, candidateLab);
+                                            float penalty = WarmthPenalty(targetLab, candidateLab, strength: cfg.WarmthPenalty);
+                                            float grayscalePenalty = GrayscalePenalty(targetLab, candidateLab, strength: cfg.GrayscalePenalty);
 
                                             float score = dist + penalty + grayscalePenalty;
                                             if (score < bestScore)

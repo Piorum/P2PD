@@ -38,20 +38,22 @@ class Program
         var config = new DitheringConfig(
             InputPath: "input.png",
             OutputPath: "output.png",
-            DownscaleFactor: 6,
+            DownscaleFactor: 3,
             CustomPalette: palette,
             CenterWeight: 1.0f,
             LuminanceBias: 0.0f,
             NeighborhoodSize: 3,
             UseMultiPass: true,
-            DarknessThreshold: 10f,
-            BlendRange: 5f,
+            DarknessThreshold: 35f,
+            BlendRange: 10f,
             BilateralFilter: new()
             {
                 Enabled = true,
-                Radius = 1,
-                ColorSigma = 2.0f
-            }
+                Radius = 3,
+                ColorSigma = 10.0f
+            },
+            WarmthPenalty: 0.0f,
+            GrayscalePenalty: 0.5f
         );
 
         Stopwatch sw = new();
