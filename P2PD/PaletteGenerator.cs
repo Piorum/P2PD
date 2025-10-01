@@ -9,7 +9,7 @@ public static class PaletteGenerator
     public static List<Rgba32> Generate(Image<Rgba32> image, int colorCount, int maxIterations = 10, int sampleSize = 20000)
     {
         var pixels = new List<Rgba32>();
-        var random = new Random();
+        var random = new Random(0);
 
         // Sample pixels from the image
         if (image.Width * image.Height <= sampleSize)
@@ -158,7 +158,7 @@ public static class PaletteGenerator
         if (colorCount == 0) return new List<Rgba32>();
 
         var clusters = new int[labPixels.Length];
-        var random = new Random();
+        var random = new Random(0);
 
         for (int iter = 0; iter < maxIterations; iter++)
         {
@@ -205,9 +205,36 @@ public static class PaletteGenerator
                 }
             }
 
-            if (!changed && iter > 0) break;
+        if (!changed && iter > 0) break;
         }
 
-        return centroids.Select(ColorUtils.ToRgba32).Distinct().ToList();
+        var palette = new HashSet<Rgba32>();
+        for (int i = 0; i < colorCount; i++)
+        {
+            float minDist = float.MaxValue;
+            Vector3 bestPixel = new Vector3();
+            bool clusterHasPixels = false;
+
+            for (int j = 0; j < labPixels.Length; j++)
+            {
+                if (clusters[j] == i)
+                {
+                    clusterHasPixels = true;
+                    float dist = ColorUtils.LabDistanceSquared(labPixels[j], centroids[i]);
+                    if (dist < minDist)
+                    {
+                        minDist = dist;
+                        bestPixel = labPixels[j];
+                    }
+                }
+            }
+
+            if (clusterHasPixels)
+            {
+                palette.Add(ColorUtils.ToRgba32(bestPixel));
+            }
+        }
+
+        return [.. palette];
     }
 }

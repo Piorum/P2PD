@@ -562,7 +562,7 @@ public static class QuadDitherProcessor
         return _quadLut;
     }
 
-    // Helper method to look up a quad from the LUT
+    // Helper method to look up a quad from the LUT with fallback
     private static ColorQuad GetBestQuadFromLut(int[,,] _quadLut, Vector3 targetLab, List<ColorQuad> quads)
     {
         const int size = 128; // Must match the size used in BuildLut
@@ -576,8 +576,30 @@ public static class QuadDitherProcessor
         int z = (int)Math.Clamp((targetLab.Z - bMin) / (bMax - bMin) * size, 0, size - 1);
 
         int quadIndex = _quadLut[x, y, z];
+
+        // Fallback if LUT is uninitialized at this point
+        if (quadIndex < 0 || quadIndex >= quads.Count)
+        {
+            float bestScore = float.MaxValue;
+            int bestIndex = 0;
+
+            for (int i = 0; i < quads.Count; i++)
+            {
+                var candidateLab = quads[i].LabAverage;
+                float dist = ColorUtils.LabDistanceSquared(candidateLab, targetLab);
+                if (dist < bestScore)
+                {
+                    bestScore = dist;
+                    bestIndex = i;
+                }
+            }
+
+            quadIndex = bestIndex;
+        }
+
         return quads[quadIndex];
     }
+
 
     private static ColorQuad MakeQuad(Rgba32[] p)
     {
