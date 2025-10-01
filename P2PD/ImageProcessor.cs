@@ -9,8 +9,18 @@ public static class QuadDitherProcessor
 {
     public static Image<Rgba32>? ProcessImage(Image<Rgba32> src, DitheringConfig cfg)
     {
-        var palette = cfg.CustomPalette ?? throw new ArgumentException("Palette required");
-        if (palette.Count == 0) throw new ArgumentException("Palette required");
+        List<Rgba32> palette;
+        if (cfg.CustomPalette is not { Count: > 0 })
+        {
+            Console.WriteLine($"Generating {cfg.GeneratedPaletteSize}-color palette from image...");
+            palette = PaletteGenerator.Generate(src, cfg.GeneratedPaletteSize);
+            if (palette.Count == 0) throw new InvalidOperationException("Palette generation failed, resulted in an empty palette.");
+            Console.WriteLine($"Generated palette with {palette.Count} colors.");
+        }
+        else
+        {
+            palette = cfg.CustomPalette;
+        }
 
         // Generate quads with multiple layouts
         var quads = GenerateQuads(palette);

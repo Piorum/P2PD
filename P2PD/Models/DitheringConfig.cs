@@ -3,8 +3,9 @@ using SixLabors.ImageSharp.PixelFormats;
 namespace P2PD.Models;
 
 public record DitheringConfig(
-    int DownscaleFactor,
-    List<Rgba32> CustomPalette,
+    int DownscaleFactor = 2,
+    List<Rgba32>? CustomPalette = null,
+    int GeneratedPaletteSize = 64,
     float CenterWeight = 0.9f, // The fix from the previous step!
     float LuminanceBias = 0f, // negative = darker, positive = lighter
     int NeighborhoodSize = 1, // radius on downscaled image used when scoring (0 = single pixel)
