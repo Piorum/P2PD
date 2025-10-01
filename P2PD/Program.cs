@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
-using CSharpImageFilter;
 using SixLabors.ImageSharp.PixelFormats;
+
+namespace P2PD;
 
 class Program
 {

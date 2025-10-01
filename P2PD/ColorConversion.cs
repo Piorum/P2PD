@@ -1,6 +1,6 @@
 using SixLabors.ImageSharp.PixelFormats;
 
-namespace CSharpImageFilter;
+namespace P2PD;
 
 /// <summary>
 /// Represents a color in the CIELAB color space.

@@ -3,7 +3,7 @@ using SixLabors.ImageSharp.ColorSpaces.Conversion;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing.Processors.Quantization;
 
-namespace CSharpImageFilter;
+namespace P2PD;
 
 // (This record might be in your file already, ensure it's present)
 public record HslColor(float H, float S, float L)

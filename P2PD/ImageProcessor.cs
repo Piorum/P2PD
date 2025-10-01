@@ -1,17 +1,10 @@
-// ImageSharp 3.x - 2x2 Quad Pattern Dither (Lab-aware, multi-pattern, neighborhood scoring, optional multi-pass)
-// Drop-in processor style utility. Self-contained with simple Lab helpers.
-
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Numerics;
-using System.Threading.Tasks;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.PixelFormats;
 
-namespace CSharpImageFilter
+namespace P2PD
 {
     public record BilateralFilterConfig(
         bool Enabled = true,
