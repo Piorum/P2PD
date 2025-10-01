@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using SixLabors.ImageSharp.PixelFormats;
+using P2PD.Models;
 
 namespace P2PD;
 
@@ -7,8 +8,6 @@ class Program
 {
     static void Main()
     {
-        // 1. Define common parameters.
-
         var palette = new List<Rgba32>
         {
             Rgba32.ParseHex("#000000"), Rgba32.ParseHex("#3c3c3c"), Rgba32.ParseHex("#787878"),
@@ -34,19 +33,11 @@ class Program
             Rgba32.ParseHex("#6d643f"), Rgba32.ParseHex("#948c6b"), Rgba32.ParseHex("#cdc59e"),
         };
 
-        var sortedPalette = palette
-            .OrderBy(c => c.R)
-            .ThenBy(c => c.G)
-            .ThenBy(c => c.B)
-            .ToList();
-
-        // 3. Create the configuration object, passing your custom palette.
-        //    The 'PaletteSize' parameter will now be ignored.
         var config = new DitheringConfig(
             InputPath: "input.png",
             OutputPath: "output.webp",
-            DownscaleFactor: 3,
-            CustomPalette: sortedPalette,
+            DownscaleFactor: 4,
+            CustomPalette: palette,
             CenterWeight: 1.0f,
             LuminanceBias: 0.0f,
             NeighborhoodSize: 3,
@@ -63,12 +54,8 @@ class Program
             GrayscalePenalty: 0.5f
         );
 
-        Stopwatch sw = new();
-        sw.Start();
-        // 4. Call the processing method. It will now use your predefined colors.
         QuadDitherProcessor.ProcessImage(config);
-        sw.Stop();
 
-        Console.WriteLine($"Total done in {sw.ElapsedMilliseconds}ms");
+        Console.WriteLine($"Done.");
     }
 }
