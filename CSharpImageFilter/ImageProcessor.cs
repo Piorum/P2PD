@@ -11,6 +11,13 @@ using SixLabors.ImageSharp.PixelFormats;
 
 namespace CSharpImageFilter
 {
+    public record BilateralFilterConfig(
+        bool Enabled = true,
+        int Radius = 2,
+        float SpatialSigma = 2.0f,
+        float ColorSigma = 10.0f
+    );
+
     public record DitheringConfig(
         string InputPath,
         string OutputPath,
@@ -21,7 +28,8 @@ namespace CSharpImageFilter
         int NeighborhoodSize = 1, // radius on downscaled image used when scoring (0 = single pixel)
         bool UseMultiPass = false, // if true will produce second pass biased darker and blend
         float DarknessThreshold = 30f, // (0-100) Luminance below which dark pass is at full strength.
-        float BlendRange = 40f         // (0-100) How far the effect takes to fade from full to zero.
+        float BlendRange = 40f,         // (0-100) How far the effect takes to fade from full to zero.
+        BilateralFilterConfig? BilateralFilter = null 
     );
 
     // Small Lab helpers. Replace with your optimized versions if present.
@@ -112,6 +120,8 @@ namespace CSharpImageFilter
                 for (int x = 0; x < down.Width; x++)
                     downLab[x, y] = ColorUtils.ToLab(down[x, y]);
 
+            var processedDownLab = ApplyBilateralFilter(downLab, cfg.BilateralFilter ?? new());
+
             // For each downscaled pixel, score all quads by neighborhood error and choose best
             Parallel.For(0, down.Height, y =>
             {
@@ -131,8 +141,8 @@ namespace CSharpImageFilter
                     
                     float centerWeight = cfg.CenterWeight; // Good value to start experimenting with
 
-                    var neighborhood = GatherNeighborhood(downLab, x, y, cfg.NeighborhoodSize);
-                    var centerPixelLab = downLab[x, y];
+                    var neighborhood = GatherNeighborhood(processedDownLab, x, y, cfg.NeighborhoodSize);
+                    var centerPixelLab = processedDownLab[x, y];
 
                     Vector3 targetMean;
 
@@ -308,6 +318,57 @@ namespace CSharpImageFilter
 
             final.Save(cfg.OutputPath);
         }
+        
+        // A new preprocessing step to apply a bilateral filter on the Lab image data.
+        private static Vector3[,] ApplyBilateralFilter(Vector3[,] labImage, BilateralFilterConfig cfg)
+        {
+            int width = labImage.GetLength(0);
+            int height = labImage.GetLength(1);
+            var filteredImage = new Vector3[width, height];
+            
+            // Pre-calculate the denominator for the Gaussian function for speed.
+            float spatialFactor = -0.5f / (cfg.SpatialSigma * cfg.SpatialSigma);
+            float colorFactor = -0.5f / (cfg.ColorSigma * cfg.ColorSigma);
+
+            Parallel.For(0, height, y =>
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    Vector3 sum = Vector3.Zero;
+                    float totalWeight = 0.0f;
+
+                    for (int dy = -cfg.Radius; dy <= cfg.Radius; dy++)
+                    {
+                        for (int dx = -cfg.Radius; dx <= cfg.Radius; dx++)
+                        {
+                            int nx = x + dx;
+                            int ny = y + dy;
+
+                            if (nx >= 0 && nx < width && ny >= 0 && ny < height)
+                            {
+                                // 1. Spatial Weight (how far away is the neighbor?)
+                                float spatialDistSq = dx * dx + dy * dy;
+                                float spatialWeight = MathF.Exp(spatialDistSq * spatialFactor);
+
+                                // 2. Color Weight (how different is the neighbor's color?)
+                                float colorDistSq = ColorUtils.LabDistanceSquared(labImage[x, y], labImage[nx, ny]);
+                                float colorWeight = MathF.Exp(colorDistSq * colorFactor);
+                                
+                                // Total weight is the product of both.
+                                float weight = spatialWeight * colorWeight;
+                                
+                                sum += labImage[nx, ny] * weight;
+                                totalWeight += weight;
+                            }
+                        }
+                    }
+                    
+                    filteredImage[x, y] = sum / totalWeight;
+                }
+            });
+
+            return filteredImage;
+        }
 
         // Generate a richer set of 2x2 quads: solid, checker, horizontal, vertical
         private static List<ColorQuad> GenerateQuads(List<Rgba32> palette)
@@ -325,29 +386,29 @@ namespace CSharpImageFilter
 
             // pairs
             for (int i = 0; i < n; i++)
-            for (int j = i + 1; j < n; j++)
-            {
-                var c1 = palette[i];
-                var c2 = palette[j];
-                var labs = new Vector3[]
+                for (int j = i + 1; j < n; j++)
                 {
+                    var c1 = palette[i];
+                    var c2 = palette[j];
+                    var labs = new Vector3[]
+                    {
                     ColorUtils.ToLab(c1),
                     ColorUtils.ToLab(c2)
-                };
+                    };
 
-                // checker A
-                var pA = new Rgba32[] { c1, c2, c2, c1 };
-                list.Add(MakeQuad(pA));
-                // checker B (swap)
-                var pB = new Rgba32[] { c2, c1, c1, c2 };
-                list.Add(MakeQuad(pB));
-                // horizontal split
-                var pH = new Rgba32[] { c1, c1, c2, c2 };
-                list.Add(MakeQuad(pH));
-                // vertical split
-                var pV = new Rgba32[] { c1, c2, c1, c2 };
-                list.Add(MakeQuad(pV));
-            }
+                    // checker A
+                    var pA = new Rgba32[] { c1, c2, c2, c1 };
+                    list.Add(MakeQuad(pA));
+                    // checker B (swap)
+                    var pB = new Rgba32[] { c2, c1, c1, c2 };
+                    list.Add(MakeQuad(pB));
+                    // horizontal split
+                    var pH = new Rgba32[] { c1, c1, c2, c2 };
+                    list.Add(MakeQuad(pH));
+                    // vertical split
+                    var pV = new Rgba32[] { c1, c2, c1, c2 };
+                    list.Add(MakeQuad(pV));
+                }
 
             // optional: remove duplicates by LabAverage key to reduce search space
             var dedup = list.GroupBy(q => (int)MathF.Round(q.LabAverage.X) * 1000000 + (int)MathF.Round(q.LabAverage.Y) * 1000 + (int)MathF.Round(q.LabAverage.Z))

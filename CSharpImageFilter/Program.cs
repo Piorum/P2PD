@@ -45,7 +45,12 @@ class Program
             UseMultiPass: true,
             LuminanceBias: 0.0f,
             DarknessThreshold: 35f,
-            BlendRange: 10f
+            BlendRange: 10f,
+            BilateralFilter: new()
+            {
+                Radius = 3,
+                ColorSigma = 4.0f
+            }
         );
 
         Stopwatch sw = new();
