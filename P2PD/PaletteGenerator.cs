@@ -137,4 +137,77 @@ public static class PaletteGenerator
 
         return [.. palette];
     }
+
+    public static List<Rgba32> Refine(Vector3[,] labImage, List<Rgba32> initialPalette, int maxIterations = 5)
+    {
+        int width = labImage.GetLength(0);
+        int height = labImage.GetLength(1);
+        var labPixels = new Vector3[width * height];
+        int pIndex = 0;
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                labPixels[pIndex++] = labImage[x, y];
+            }
+        }
+
+        var centroids = initialPalette.Select(ColorUtils.ToLab).ToList();
+        int colorCount = centroids.Count;
+
+        if (colorCount == 0) return new List<Rgba32>();
+
+        var clusters = new int[labPixels.Length];
+        var random = new Random();
+
+        for (int iter = 0; iter < maxIterations; iter++)
+        {
+            Parallel.For(0, labPixels.Length, i =>
+            {
+                float minDist = float.MaxValue;
+                int bestCluster = 0;
+                for (int j = 0; j < colorCount; j++)
+                {
+                    float dist = ColorUtils.LabDistanceSquared(labPixels[i], centroids[j]);
+                    if (dist < minDist)
+                    {
+                        minDist = dist;
+                        bestCluster = j;
+                    }
+                }
+                clusters[i] = bestCluster;
+            });
+
+            var newCentroids = new Vector3[colorCount];
+            var clusterCounts = new int[colorCount];
+            for (int i = 0; i < labPixels.Length; i++)
+            {
+                newCentroids[clusters[i]] += labPixels[i];
+                clusterCounts[clusters[i]]++;
+            }
+
+            bool changed = false;
+            for (int i = 0; i < colorCount; i++)
+            {
+                if (clusterCounts[i] > 0)
+                {
+                    var newCentroid = newCentroids[i] / clusterCounts[i];
+                    if (ColorUtils.LabDistanceSquared(newCentroid, centroids[i]) > 1e-6f)
+                    {
+                        centroids[i] = newCentroid;
+                        changed = true;
+                    }
+                }
+                else
+                {
+                    centroids[i] = labPixels[random.Next(labPixels.Length)];
+                    changed = true;
+                }
+            }
+
+            if (!changed && iter > 0) break;
+        }
+
+        return centroids.Select(ColorUtils.ToRgba32).Distinct().ToList();
+    }
 }

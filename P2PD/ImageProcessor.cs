@@ -10,26 +10,25 @@ public static class QuadDitherProcessor
     public static Image<Rgba32>? ProcessImage(Image<Rgba32> src, DitheringConfig cfg)
     {
         List<Rgba32> palette;
-        if (cfg.CustomPalette is not { Count: > 0 })
+        int RefinementIterations = 0;
+        if (cfg.PaletteConfig is PresetPalette presetPalette)
         {
-            Console.WriteLine($"Generating {cfg.GeneratedPaletteSize}-color palette from image...");
-            palette = PaletteGenerator.Generate(src, cfg.GeneratedPaletteSize);
+            palette = presetPalette.Palette;
+            if (palette.Count == 0) throw new ArgumentException("Preset palette cannot be empty.");
+        }
+        else if (cfg.PaletteConfig is GeneratedPalette generatedPalette)
+        {
+            RefinementIterations = generatedPalette.RefinementIterations;
+
+            Console.WriteLine($"Generating {generatedPalette.Size}-color palette from image...");
+            palette = PaletteGenerator.Generate(src, generatedPalette.Size);
             if (palette.Count == 0) throw new InvalidOperationException("Palette generation failed, resulted in an empty palette.");
             Console.WriteLine($"Generated palette with {palette.Count} colors.");
         }
         else
         {
-            palette = cfg.CustomPalette;
+            throw new NotSupportedException("Unsupported PaletteConfig type.");
         }
-
-        // Generate quads with multiple layouts
-        var quads = GenerateQuads(palette);
-
-        var _quadLut = BuildLut(quads, cfg);
-        Console.WriteLine($"Quad LUTs done.");
-
-        var (_paletteLut, _) = BuildPaletteLut(palette, cfg);
-        Console.WriteLine($"Palette LUTs done.");
 
         using var down = HardDownscale(src, cfg.DownscaleFactor);
         Console.WriteLine($"Downscale done.");
@@ -51,6 +50,22 @@ public static class QuadDitherProcessor
 
         var processedDownLab = ApplyBilateralFilter(downLab, cfg.BilateralFilter ?? new());
         Console.WriteLine($"Preproccessing done.");
+
+        if (RefinementIterations > 0)
+        {
+            Console.WriteLine($"Refining palette ({RefinementIterations} iterations)...");
+            palette = PaletteGenerator.Refine(processedDownLab, palette, RefinementIterations);
+            Console.WriteLine($"Refined palette has {palette.Count} colors.");
+        }
+
+        // Generate quads with multiple layouts
+        var quads = GenerateQuads(palette);
+
+        var _quadLut = BuildLut(quads, cfg);
+        Console.WriteLine($"Quad LUTs done.");
+
+        var (_paletteLut, _) = BuildPaletteLut(palette, cfg);
+        Console.WriteLine($"Palette LUTs done.");
 
         // For each downscaled pixel, score all quads by neighborhood error and choose best
         Parallel.For(0, down.Height, y =>
