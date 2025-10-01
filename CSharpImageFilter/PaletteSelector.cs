@@ -1,9 +1,7 @@
 using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.ColorSpaces;
 using SixLabors.ImageSharp.ColorSpaces.Conversion;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing.Processors.Quantization;
-using SixLabors.ImageSharp.Processing;
 
 namespace CSharpImageFilter;
 
@@ -78,7 +76,7 @@ public static class PaletteSelector
     /// <summary>
     /// Calculates the squared Euclidean distance between two L*a*b* colors.
     /// </summary>
-    private static double GetLabDistanceSquared(Lab color1, Lab color2)
+    public static double GetLabDistanceSquared(Lab color1, Lab color2)
     {
         double dL = color1.L - color2.L;
         double dA = color1.A - color2.A;

@@ -1,19 +1,15 @@
 ﻿using CSharpImageFilter;
 using SixLabors.ImageSharp.PixelFormats;
-using System.Collections.Generic;
 
 class Program
 {
     static void Main()
     {
         // 1. Define common parameters.
-        string inputPath = "input.png";
-        string outputPath = "output.png";
-        int downscaleFactor = 3;
 
-        var fullPalette = new List<Rgba32>
+        var palette = new List<Rgba32>
         {
-            Rgba32.ParseHex("#000000"), Rgba32.ParseHex("#3c3c3c"), Rgba32.ParseHex("#787878"), 
+            Rgba32.ParseHex("#000000"), Rgba32.ParseHex("#3c3c3c"), Rgba32.ParseHex("#787878"),
             Rgba32.ParseHex("#aaaaaa"), Rgba32.ParseHex("#d2d2d2"), Rgba32.ParseHex("#ffffff"),
             Rgba32.ParseHex("#333941"), Rgba32.ParseHex("#6d758d"), Rgba32.ParseHex("#b3b9d1"),
             Rgba32.ParseHex("#600018"), Rgba32.ParseHex("#a50e1e"), Rgba32.ParseHex("#ed1c24"),
@@ -39,17 +35,13 @@ class Program
         // 3. Create the configuration object, passing your custom palette.
         //    The 'PaletteSize' parameter will now be ignored.
         var config = new DitheringConfig(
-            PaletteSize: 64, // This is ignored because we are providing a custom palette
-            CustomPalette: fullPalette, // Pass your list of colors here
-
-            //these are useless right now
-            LuminanceWeight: 1.0f,
-            BrightnessBias: 1.0f,
-            Smoothness: 0.0f,
-            SmoothnessPreference: 0.0f
+            InputPath: "input.png",
+            OutputPath: "output.png",
+            DownscaleFactor: 2,
+            CustomPalette: palette
         );
 
         // 4. Call the processing method. It will now use your predefined colors.
-        ImageProcessor.ProcessImage(inputPath, outputPath, downscaleFactor, config);
+        QuadDitherProcessor.ProcessImage(config);
     }
 }
