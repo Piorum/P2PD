@@ -1,7 +1,5 @@
-using System.Diagnostics;
 using System.Numerics;
 using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.PixelFormats;
 using P2PD.Models;
 
@@ -9,18 +7,7 @@ namespace P2PD;
 
 public static class QuadDitherProcessor
 {
-    private static int[,,]? _paletteLut;
-    private static List<Vector3>? _paletteLab; // Store Lab versions of palette colors
-    
-    private static int[,,]? _quadLut;
-
-    private static readonly WebpEncoder webpEncoder = new()
-    {
-        FileFormat = WebpFileFormatType.Lossless,
-        Quality = 100
-    };
-
-    public static void ProcessImage(DitheringConfig cfg)
+    public static Image<Rgba32>? ProcessImage(Image<Rgba32> src, DitheringConfig cfg)
     {
         var palette = cfg.CustomPalette ?? throw new ArgumentException("Palette required");
         if (palette.Count == 0) throw new ArgumentException("Palette required");
@@ -28,13 +15,11 @@ public static class QuadDitherProcessor
         // Generate quads with multiple layouts
         var quads = GenerateQuads(palette);
 
-        BuildLut(quads, cfg);
+        var _quadLut = BuildLut(quads, cfg);
         Console.WriteLine($"Quad LUTs done.");
 
-        BuildPaletteLut(palette, cfg);
+        var (_paletteLut, _) = BuildPaletteLut(palette, cfg);
         Console.WriteLine($"Palette LUTs done.");
-
-        using var src = Image.Load<Rgba32>(cfg.InputPath);
 
         using var down = HardDownscale(src, cfg.DownscaleFactor);
         Console.WriteLine($"Downscale done.");
@@ -105,7 +90,7 @@ public static class QuadDitherProcessor
                 }
 
                 // Now use this new 'targetMean' for the LUT lookup
-                ColorQuad best = GetBestQuadFromLut(targetMean, quads);
+                ColorQuad best = GetBestQuadFromLut(_quadLut, targetMean, quads);
 
                 // write quad into output
                 int outX = x * 2;
@@ -119,10 +104,7 @@ public static class QuadDitherProcessor
         Console.WriteLine($"Main pass done.");
 
         if (!cfg.UseMultiPass)
-        {
-            output.Save(cfg.OutputPath, webpEncoder);
-            return;
-        }
+            return output.Clone();
 
         // Multi-pass: create a second pass biased darker and blend by per-pixel error
         using var outputB = new Image<Rgba32>(outSize.Width, outSize.Height);
@@ -179,7 +161,7 @@ public static class QuadDitherProcessor
                 }
 
                 // Now use this new 'targetMean' for the LUT lookup
-                ColorQuad best = GetBestQuadFromLut(targetMean, quads);
+                ColorQuad best = GetBestQuadFromLut(_quadLut, targetMean, quads);
 
                 int outX = x * 2;
                 int outY = y * 2;
@@ -247,14 +229,14 @@ public static class QuadDitherProcessor
                             var blendedLab = Vector3.Lerp(labA, labB, blendFactor);
 
                             // Snap the blended result to the nearest true palette color
-                            final[ox + sx, oy + sy] = GetNearestPaletteColor(blendedLab, palette);
+                            final[ox + sx, oy + sy] = GetNearestPaletteColor(_paletteLut, blendedLab, palette);
                         }
                     }
             }
         }
         Console.WriteLine($"Blend pass done.");
 
-        final.Save(cfg.OutputPath, webpEncoder);
+        return final.Clone();
     }
     
     // A new preprocessing step to apply a bilateral filter on the Lab image data.
@@ -396,10 +378,10 @@ public static class QuadDitherProcessor
     }
 
     // A new method to build the Palette LUT, call this once after loading the palette
-    private static void BuildPaletteLut(List<Rgba32> palette, DitheringConfig cfg, int size = 128)
+    private static (int[,,], List<Vector3>) BuildPaletteLut(List<Rgba32> palette, DitheringConfig cfg, int size = 128)
     {
-        _paletteLut = new int[size, size, size];
-        _paletteLab = [.. palette.Select(ColorUtils.ToLab)];
+        var _paletteLut = new int[size, size, size];
+        List<Vector3> _paletteLab = [.. palette.Select(ColorUtils.ToLab)];
 
         const float lMin = 0f, lMax = 100f;
         const float aMin = -120f, aMax = 120f;
@@ -438,10 +420,12 @@ public static class QuadDitherProcessor
                 }
             }
         });
+
+        return (_paletteLut, _paletteLab);
     }
 
     // Helper to get the nearest palette color for any given Lab color
-    private static Rgba32 GetNearestPaletteColor(Vector3 labColor, List<Rgba32> palette)
+    private static Rgba32 GetNearestPaletteColor(int[,,] _paletteLut, Vector3 labColor, List<Rgba32> palette)
     {
         const int size = 128; // Must match BuildPaletteLut size
         const float lMin = 0f, lMax = 100f;
@@ -452,28 +436,28 @@ public static class QuadDitherProcessor
         int y = (int)Math.Clamp((labColor.Y - aMin) / (aMax - aMin) * size, 0, size - 1);
         int z = (int)Math.Clamp((labColor.Z - bMin) / (bMax - bMin) * size, 0, size - 1);
 
-        int index = _paletteLut![x, y, z];
+        int index = _paletteLut[x, y, z];
         return palette[index];
     }
 
     // A new method to build the LUT
-    private static void BuildLut(List<ColorQuad> quads, DitheringConfig cfg, int size = 128)
+    private static int[,,] BuildLut(List<ColorQuad> quads, DitheringConfig cfg, int size = 128)
     {
-        _quadLut = new int[size, size, size];
+        var _quadLut = new int[size, size, size];
         var quadsLab = quads.Select(q => q.LabAverage).ToList();
 
         // --- STEP 1: Build the Spatial Acceleration Grid ---
 
         // Define the coarseness of our search grid. 16^3 = 4096 cells. This is a good starting point.
-        const int grid_size = 16; 
+        const int grid_size = 16;
         var grid = new Dictionary<Vector3, List<int>>();
 
         const float lMin = 0f, lMax = 100f;
         const float aMin = -120f, aMax = 120f;
         const float bMin = -120f, bMax = 120f;
-        
+
         // 1a: Sort all quads into the coarse grid cells.
-        for(int i=0; i < quadsLab.Count; i++)
+        for (int i = 0; i < quadsLab.Count; i++)
         {
             var lab = quadsLab[i];
             var gridPos = new Vector3(
@@ -509,10 +493,10 @@ public static class QuadDitherProcessor
                         (int)Math.Clamp((targetLab.Y - aMin) / (aMax - aMin) * grid_size, 0, grid_size - 1),
                         (int)Math.Clamp((targetLab.Z - bMin) / (bMax - bMin) * grid_size, 0, grid_size - 1)
                     );
-                    
+
                     int bestQuadIndex = -1;
                     float bestScore = float.MaxValue;
-                    
+
                     // 2a: Search a 3x3x3 block of grid cells around our target position.
                     // This ensures we find the true nearest neighbor even if it's in an adjacent cell.
                     for (int dz = -1; dz <= 1; dz++)
@@ -522,11 +506,11 @@ public static class QuadDitherProcessor
                             for (int dx = -1; dx <= 1; dx++)
                             {
                                 var searchPos = new Vector3(gridPos.X + dx, gridPos.Y + dy, gridPos.Z + dz);
-                                if(grid.TryGetValue(searchPos, out var quadIndices))
+                                if (grid.TryGetValue(searchPos, out var quadIndices))
                                 {
                                     // THIS IS THE KEY: We now loop over a tiny list (e.g., 1-50 quads)
                                     // instead of the full 7,000.
-                                    foreach(var index in quadIndices)
+                                    foreach (var index in quadIndices)
                                     {
                                         var candidateLab = quadsLab[index];
                                         float dist = ColorUtils.LabDistanceSquared(candidateLab, targetLab);
@@ -549,10 +533,12 @@ public static class QuadDitherProcessor
                 }
             }
         });
+
+        return _quadLut;
     }
 
     // Helper method to look up a quad from the LUT
-    private static ColorQuad GetBestQuadFromLut(Vector3 targetLab, List<ColorQuad> quads)
+    private static ColorQuad GetBestQuadFromLut(int[,,] _quadLut, Vector3 targetLab, List<ColorQuad> quads)
     {
         const int size = 128; // Must match the size used in BuildLut
         const float lMin = 0f, lMax = 100f;
@@ -564,7 +550,7 @@ public static class QuadDitherProcessor
         int y = (int)Math.Clamp((targetLab.Y - aMin) / (aMax - aMin) * size, 0, size - 1);
         int z = (int)Math.Clamp((targetLab.Z - bMin) / (bMax - bMin) * size, 0, size - 1);
 
-        int quadIndex = _quadLut![x, y, z];
+        int quadIndex = _quadLut[x, y, z];
         return quads[quadIndex];
     }
 

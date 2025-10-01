@@ -1,6 +1,8 @@
 ﻿using System.Diagnostics;
 using SixLabors.ImageSharp.PixelFormats;
 using P2PD.Models;
+using SixLabors.ImageSharp.Formats.Webp;
+using SixLabors.ImageSharp;
 
 namespace P2PD;
 
@@ -33,9 +35,9 @@ class Program
             Rgba32.ParseHex("#6d643f"), Rgba32.ParseHex("#948c6b"), Rgba32.ParseHex("#cdc59e"),
         };
 
+        using var src = Image.Load<Rgba32>("input.png");
+
         var config = new DitheringConfig(
-            InputPath: "input.png",
-            OutputPath: "output.webp",
             DownscaleFactor: 4,
             CustomPalette: palette,
             CenterWeight: 1.0f,
@@ -54,7 +56,15 @@ class Program
             GrayscalePenalty: 0.5f
         );
 
-        QuadDitherProcessor.ProcessImage(config);
+        using var ditheredImage = QuadDitherProcessor.ProcessImage(src.Clone(), config) ?? throw new("Null Returned From Dither Processor");
+
+        WebpEncoder webpEncoder = new()
+        {
+            FileFormat = WebpFileFormatType.Lossless,
+            Quality = 100
+        };
+
+        ditheredImage.Save("output.webp", webpEncoder);
 
         Console.WriteLine($"Done.");
     }

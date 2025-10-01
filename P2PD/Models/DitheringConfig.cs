@@ -3,8 +3,6 @@ using SixLabors.ImageSharp.PixelFormats;
 namespace P2PD.Models;
 
 public record DitheringConfig(
-    string InputPath,
-    string OutputPath,
     int DownscaleFactor,
     List<Rgba32> CustomPalette,
     float CenterWeight = 0.9f, // The fix from the previous step!
